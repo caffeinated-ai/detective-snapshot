@@ -1,6 +1,6 @@
 # Detective Snapshot 🕵️‍♂️🔍
 
-A Python package for capturing and comparing function input/output snapshots. Perfect for debugging, testing, and understanding complex function call hierarchies.
+A Python package for capturing function input/output snapshots. Perfect for debugging, testing, and understanding complex function call hierarchies.
 
 ## Features
 - 📸 Capture function inputs and outputs
@@ -8,7 +8,7 @@ A Python package for capturing and comparing function input/output snapshots. Pe
 - 🎯 Select specific fields to snapshot
 - 📦 Support for Python objects, dataclasses, and protobufs
 
-## Installation
+## Install
 
 ```bash
 pip install detective-snapshot
@@ -16,55 +16,49 @@ pip install detective-snapshot
 
 ## Quick Start
 
-Enable debug mode to write snapshots:
-```bash
-export DEBUG=true
-```
-
-With debug mode on, each call to an outermost decorated function creates a new snapshot file in `./debug_snapshots/` with a unique UUID.
-
-Here's a simple example using a library catalog system:
-
 ```python
 from detective import snapshot
 
 @snapshot()
-def get_book_details(book):
-    author = get_author(book["author_id"])
-    return f"{book['title']} by {author}"
+def calculate_cat_food(cats):
+    total = sum(get_cat_appetite(cat) for cat in cats)
+    return f"Need {total}oz of food per day"
 
 @snapshot()
-def get_author(author_id):
-    # Simulate database lookup
-    return "J.K. Rowling"
+def get_cat_appetite(cat):
+    # Cats eat about 0.5oz per pound of weight
+    return cat["weight"] * 0.5
 
-# Use the functions
-book = {
-    "title": "Harry Potter",
-    "author_id": "jkr_001"
-}
-result = get_book_details(book)
+# Feed the kitties
+cats = [
+    {"name": "Whiskers", "weight": 10},
+    {"name": "Chonk", "weight": 15}
+]
+result = calculate_cat_food(cats)
 ```
 
-This will create a debug file in `./debug_snapshots/` with content like:
+With debug mode on, each call to an outermost decorated function creates a new snapshot file in `./debug_snapshots/` with a unique UUID:
 
 ```json
 {
-    "FUNCTION": "get_book_details",
+    "FUNCTION": "calculate_cat_food",
     "INPUTS": {
-        "book": {
-            "title": "Harry Potter",
-            "author_id": "jkr_001"
-        }
+        "cats": [
+            {"name": "Whiskers", "weight": 10},
+            {"name": "Chonk", "weight": 15}
+        ]
     },
-    "OUTPUT": "Harry Potter by J.K. Rowling",
+    "OUTPUT": "Need 12.5oz of food per day",
     "CALLS": [
         {
-            "FUNCTION": "get_author",
-            "INPUTS": {
-                "author_id": "jkr_001"
-            },
-            "OUTPUT": "J.K. Rowling"
+            "FUNCTION": "get_cat_appetite",
+            "INPUTS": {"cat": {"name": "Whiskers", "weight": 10}},
+            "OUTPUT": 5.0
+        },
+        {
+            "FUNCTION": "get_cat_appetite",
+            "INPUTS": {"cat": {"name": "Chonk", "weight": 15}},
+            "OUTPUT": 7.5
         }
     ]
 }
@@ -72,33 +66,32 @@ This will create a debug file in `./debug_snapshots/` with content like:
 
 ## Field Selection
 
-Detective Snapshot supports both its own simple field selection syntax and full [JSONPath](https://github.com/h2non/jsonpath-ng) expressions out of the box. You can capture specific fields using various selection patterns:
+Capture only the fields you care about:
 
 ```python
 @snapshot(
-    input_fields=["book.title", "book.author_id"],
-    output_fields=["name"]
+    input_fields=["cat.name", "cat.weight"],
+    output_fields=["daily_food"]
 )
-def process_book(book):
-    # Only specified fields will be captured
-    pass
+def calculate_cat_diet(cat):
+    daily_food = cat["weight"] * 0.5
+    return {"daily_food": daily_food, "feeding_schedule": "twice daily"}
 ```
 
-### Supported Field Selection Patterns
+### Selection Patterns
 
 | Pattern | Example | Description |
 |---------|---------|-------------|
 | Direct Field | `name` | Select a field directly from root |
-| Nested Field | `user.address.city` | Navigate through nested objects |
-| Array Index | `books[0].title` | Select specific array element |
-| Array Wildcard | `books[*].title` | Select field from all array elements |
-| Multiple Fields | `user.(name,age)` | Select multiple fields from an object |
-| Wildcard Object | `users.*.name` | Select field from all child objects |
+| Nested Field | `cat.weight` | Navigate through nested objects |
+| Array Index | `cats[0].name` | Select specific array element |
+| Array Wildcard | `cats[*].weight` | Select field from all array elements |
+| Multiple Fields | `cat.(name,weight)` | Select multiple fields from an object |
+| Wildcard Object | `pets.*.name` | Select field from all child objects |
 | Args Syntax | `args[0].name` | Select from function arguments |
-| Mixed Access | `users[*].addresses.*.city` | Combine array and object access |
-| JSONPath | `$.users[?(@.age > 18)].name` | Use full JSONPath expressions |
+| Mixed Access | `pets[*].records.*.weight` | Combine array and object access |
 
-For more examples of field selection patterns, check out our test files - particularly `test_snapshot_fields_selection.py` which contains comprehensive examples of different selection patterns and edge cases.
+Full [JSONPath](https://github.com/h2non/jsonpath-ng) support is also available for more complex queries.
 
 ## Advanced Usage
 
@@ -106,31 +99,31 @@ For more examples of field selection patterns, check out our test files - partic
 
 ```python
 @dataclass
-class Book:
-    title: str
-    author: str
-    chapters: List[Chapter]
+class Cat:
+    name: str
+    breed: str
+    medical_records: List[Record]
 
-@snapshot(input_fields=["book.chapters[*].title"])
-def get_chapter_titles(book: Book):
-    return [chapter.title for chapter in book.chapters]
+@snapshot(input_fields=["cat.medical_records[*].weight"])
+def track_weight_history(cat: Cat):
+    return [record.weight for record in cat.medical_records]
 ```
 
 ### Handle Nested Function Calls
 
 ```python
 @snapshot()
-def process_library(library):
-    books = get_books(library.id)
-    return categorize_books(books)
+def process_cattery(cattery):
+    cats = get_cats(cattery.id)
+    return categorize_cats(cats)
 
 @snapshot()
-def get_books(library_id):
-    return ["Book1", "Book2"]
+def get_cats(cattery_id):
+    return ["Whiskers", "Chonk"]
 
 @snapshot()
-def categorize_books(books):
-    return {"fiction": books}
+def categorize_cats(cats):
+    return {"chonky": cats}
 ```
 
 The debug file will include the complete call hierarchy with inputs and outputs for each function.
@@ -141,4 +134,4 @@ Contributions are welcome! Please check out our [Contributing Guide](CONTRIBUTIN
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE)
