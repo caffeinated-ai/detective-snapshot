@@ -1,242 +1,123 @@
-import unittest
-from dataclasses import dataclass
-from typing import List
+import os
+import uuid
+from typing import Any
+from unittest.mock import patch
 
-from detective.snapshot import _get_nested_value
+import pytest
+
+from detective import snapshot
+
+from .fixtures_data import Cat, CocoCat, CocoDataclass, CocoProto
+from .utils import are_snapshots_equal, get_debug_file, setup_debug_dir
+
+# Test data for nested fields test
+COCO_DATA = {
+    "name": "Coco",
+    "color": "calico",
+    "foods": ["sushi", "salmon", "tuna"],
+    "activities": [
+        {"name": "sunbathing", "cuteness": "purrfectly_toasty"},
+        {"name": "brushing", "adorableness": "melts_like_butter"},
+    ],
+}
 
 
-@dataclass
-class TestItem:
-    normalized_text: str
-    full_text: str
+class TestSnapshot:
+    def setup_method(self):
+        """Setup before each test."""
+        setup_debug_dir()
+        os.environ["DEBUG"] = "true"
 
+    def test_debug_mode_off(self):
+        """Test that no output is generated when debug mode is off."""
+        os.environ["DEBUG"] = "false"
 
-@dataclass
-class TestContext:
-    names: List[str]
+        @snapshot()
+        def simple_function(x):
+            return x * 2
 
+        result = simple_function(5)
+        assert result == 10
 
-class TestDebugUtils(unittest.TestCase):
-    def test_direct_parameter_access(self):
-        """Test direct parameter access without $ prefix"""
-        test_obj = {
-            "kwargs": {
-                "param1": "value1",
-                "param2": "value2",
-            }
-        }
-        self.assertEqual(_get_nested_value(test_obj, "param1"), "value1")
+        debug_dir = os.path.join(os.getcwd(), "debug_snapshots")
+        debug_files = [f for f in os.listdir(debug_dir) if f.endswith(".json")]
+        assert (
+            len(debug_files) == 0
+        ), "No debug files should be created when debug is off"
 
-    def test_nested_parameter_access(self):
-        """Test nested parameter access with dot notation"""
-        test_obj = {
-            "kwargs": {
-                "context": TestContext(names=["name1", "name2"]),
-            }
-        }
-        self.assertEqual(
-            _get_nested_value(test_obj, "context.names"), ["name1", "name2"]
-        )
+    @patch("detective.snapshot.uuid.uuid4")
+    def test_dataclass_serialization(self, mock_uuid):
+        """Test serialization of dataclass objects."""
+        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
+        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
 
-    def test_array_access(self):
-        """Test array indexing"""
-        test_obj = {
-            "kwargs": {
-                "items": [
-                    TestItem("text1", "full1"),
-                    TestItem("text2", "full2"),
-                ]
-            }
-        }
-        self.assertEqual(
-            _get_nested_value(test_obj, "items[0].normalized_text"), "text1"
-        )
+        @snapshot()
+        def process_cat(cat: Cat) -> str:
+            return f"{cat.name} likes {cat.foods[0]}"
 
-    def test_array_wildcard_access(self):
-        """Test array wildcard access"""
-        test_obj = {
-            "kwargs": {
-                "result_items": [
-                    TestItem("text1", "full1"),
-                    TestItem("text2", "full2"),
-                ]
-            }
-        }
-        expected = ["text1", "text2"]
-        result = _get_nested_value(test_obj, "result_items[*].normalized_text")
-        self.assertEqual(result, expected)
+        result = process_cat(CocoDataclass)
+        assert result == "Coco likes sushi"
 
-    def test_array_wildcard_with_empty_list(self):
-        """Test array wildcard with empty list"""
-        test_obj = {"kwargs": {"result_items": []}}
-        result = _get_nested_value(test_obj, "result_items[*].normalized_text")
-        self.assertEqual(result, [])
-
-    def test_array_wildcard_with_none_values(self):
-        """Test array wildcard with None values"""
-        test_obj = {
-            "kwargs": {
-                "result_items": [
-                    TestItem("text1", "full1"),
-                    None,
-                    TestItem("text3", "full3"),
-                ]
-            }
-        }
-        expected = ["text1", None, "text3"]
-        result = _get_nested_value(test_obj, "result_items[*].normalized_text")
-        self.assertEqual(result, expected)
-
-    def test_complex_nested_array_access(self):
-        """Test complex nested array access with multiple wildcards"""
-        test_obj = {
-            "kwargs": {
-                "groups": [
-                    {
-                        "items": [
-                            TestItem("text1", "full1"),
-                            TestItem("text2", "full2"),
-                        ]
-                    },
-                    {
-                        "items": [
-                            TestItem("text3", "full3"),
-                        ]
-                    },
-                ]
-            }
-        }
-        expected = [["text1", "text2"], ["text3"]]
-        result = _get_nested_value(test_obj, "groups[*].items[*].normalized_text")
-        self.assertEqual(result, expected)
-
-    def test_multiple_field_selection(self):
-        """Test selecting multiple fields with parentheses syntax"""
-        test_obj = {
-            "kwargs": {
-                "items": [
-                    TestItem("text1", "full1"),
-                    TestItem("text2", "full2"),
-                ]
-            }
-        }
-        result = _get_nested_value(test_obj, "items[*].(normalized_text,full_text)")
-        expected = [
-            {"normalized_text": "text1", "full_text": "full1"},
-            {"normalized_text": "text2", "full_text": "full2"},
-        ]
-        self.assertEqual(result, expected)
-
-    def test_multiple_field_selection_with_spaces(self):
-        """Test selecting multiple fields with spaces in parentheses syntax"""
-        test_obj = {
-            "kwargs": {
-                "result_items": [
-                    TestItem("text1", "full1"),
-                    TestItem("text2", "full2"),
-                ]
-            }
-        }
-        # Test with spaces after comma
-        result1 = _get_nested_value(
-            test_obj, "result_items[*].(normalized_text, full_text)"
-        )
-        expected = [
-            {"normalized_text": "text1", "full_text": "full1"},
-            {"normalized_text": "text2", "full_text": "full2"},
-        ]
-        self.assertEqual(result1, expected)
-
-        # Test with spaces and no spaces
-        result2 = _get_nested_value(
-            test_obj, "result_items[*].(normalized_text,full_text, other_field)"
-        )
-        expected = [
-            {"normalized_text": "text1", "full_text": "full1", "other_field": None},
-            {"normalized_text": "text2", "full_text": "full2", "other_field": None},
-        ]
-        self.assertEqual(result2, expected)
-
-        # Test with mixed spacing
-        result3 = _get_nested_value(
-            test_obj, "result_items[*].( normalized_text,full_text )"
-        )
-        expected = [
-            {"normalized_text": "text1", "full_text": "full1"},
-            {"normalized_text": "text2", "full_text": "full2"},
-        ]
-        self.assertEqual(result3, expected)
-
-    def test_real_world_example(self):
-        """Test with real-world example from SearchResultAnalyzer"""
-        test_obj = {
-            "kwargs": {
-                "result_items": [
-                    TestItem(normalized_text="Clean Product 1", full_text="Product 1"),
-                    TestItem(normalized_text="Clean Product 2", full_text="Product 2"),
-                ],
-                "context": TestContext(names=["Previous Product"]),
-            }
+        _, actual_data = get_debug_file(mock_uuid_str)
+        expected_data = {
+            "FUNCTION": "process_cat",
+            "INPUTS": {
+                "cat": {
+                    "name": "Coco",
+                    "color": "calico",
+                    "foods": ["sushi", "salmon", "tuna"],
+                    "activities": [
+                        {"name": "sunbathing", "cuteness": "purrfectly_toasty"},
+                        {"name": "brushing", "adorableness": "melts_like_butter"},
+                    ],
+                }
+            },
+            "OUTPUT": "Coco likes sushi",
         }
 
-        # Test result_items array access
-        result1 = _get_nested_value(test_obj, "result_items[*].normalized_text")
-        self.assertEqual(result1, ["Clean Product 1", "Clean Product 2"])
+        assert are_snapshots_equal(actual_data, expected_data)
 
-        # Test context access
-        result2 = _get_nested_value(test_obj, "context.names")
-        self.assertEqual(result2, ["Previous Product"])
+    @patch("detective.snapshot.uuid.uuid4")
+    def test_protobuf_serialization(self, mock_uuid):
+        """Test serialization of protobuf objects."""
+        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
+        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
 
-    def test_invalid_path(self):
-        """Test handling of invalid paths"""
-        test_obj = {"kwargs": {"param1": "value1"}}
-        self.assertIsNone(_get_nested_value(test_obj, "invalid.path"))
-        self.assertIsNone(_get_nested_value(test_obj, "param1[999]"))
-        self.assertIsNone(_get_nested_value(test_obj, "param1.nonexistent"))
+        @snapshot()
+        def color(cat_proto: Any) -> str:
+            return cat_proto.color
 
-    def test_none_handling(self):
-        """Test handling of None values at different levels"""
-        test_obj = {
-            "kwargs": {
-                "items": [
-                    {"value": None},
-                    None,
-                    {"value": "test"},
-                ]
-            }
-        }
-        result = _get_nested_value(test_obj, "items[*].value")
-        self.assertEqual(result, [None, None, "test"])
+        assert color(CocoProto) == "calico"
 
-    def test_multiple_field_selection_real_world(self):
-        """Test the exact pattern from product_search_service.py"""
-        test_obj = {
-            "kwargs": {
-                "result_items": [
-                    TestItem(normalized_text="Product 1", full_text="Original 1"),
-                    TestItem(normalized_text="Product 2", full_text="Original 2"),
-                ]
-            }
+        _, actual_data = get_debug_file(mock_uuid_str)
+        expected_data = {
+            "FUNCTION": "color",
+            "INPUTS": {"cat_proto": CocoCat},
+            "OUTPUT": "calico",
         }
 
-        # Test the exact pattern from product_search_service.py
-        result = _get_nested_value(
-            test_obj, "result_items[*].(normalized_text, full_text)"
-        )
-        expected = [
-            {"normalized_text": "Product 1", "full_text": "Original 1"},
-            {"normalized_text": "Product 2", "full_text": "Original 2"},
-        ]
-        self.assertEqual(result, expected)
+        assert are_snapshots_equal(actual_data, expected_data)
 
-        # Also test individual field access to compare
-        result_normalized = _get_nested_value(
-            test_obj, "result_items[*].normalized_text"
-        )
-        result_full = _get_nested_value(test_obj, "result_items[*].full_text")
-        self.assertEqual(result_normalized, ["Product 1", "Product 2"])
-        self.assertEqual(result_full, ["Original 1", "Original 2"])
+    @patch("detective.snapshot.uuid.uuid4")
+    def test_no_inputs_outputs(self, mock_uuid):
+        """Test capturing a function with no inputs or outputs."""
+        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
+        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
 
+        @snapshot()
+        def func() -> None:
+            pass
 
-if __name__ == "__main__":
-    unittest.main()
+        func()
+
+        # Get the actual output
+        _, actual_data = get_debug_file(mock_uuid_str)
+
+        # Create expected output
+        expected_data = {
+            "FUNCTION": "func",
+            "INPUTS": {},  # Empty dict since no inputs
+            "OUTPUT": None,  # None since no return value
+        }
+
+        assert are_snapshots_equal(actual_data, expected_data)

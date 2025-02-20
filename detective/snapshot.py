@@ -5,607 +5,380 @@ import logging
 import os
 import uuid
 from contextvars import ContextVar
-from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from detective.proto_utils import protobuf_to_json
+import jsbeautifier
+from jsonpath_ng.exceptions import JSONPathError
 from jsonpath_ng.ext import parse as parse_ext
 
+from detective.proto_utils import is_protobuf, protobuf_to_dict
+
+# --- Configure Logging ---
 logger = logging.getLogger(__name__)
 
 # --- Context Variables for Session Management ---
 session_id_var: ContextVar[Optional[str]] = ContextVar("debug_session_id", default=None)
+# Store a list of current call data dictionaries
 inner_calls_var: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar(
     "inner_function_calls", default=None
 )
 
 
-class PathComponent:
-    """Represents a component of a field path."""
-
-    def __init__(
-        self,
-        name: str,
-        array_index: Optional[Union[int, str]] = None,
-        fields: Optional[List[str]] = None,
-    ):
-        self.name = name
-        self.array_index = array_index
-        self.fields = fields
-
-    @property
-    def is_wildcard(self) -> bool:
-        return self.array_index == "*"
-
-    @property
-    def is_array_access(self) -> bool:
-        return self.array_index is not None
-
-    @property
-    def has_fields(self) -> bool:
-        return self.fields is not None
-
-
-def _parse_path(field_path: str) -> List[PathComponent]:
-    """
-    Parse a field path into components.
-
-    Args:
-        field_path: Path expression (e.g., 'items[0].name', 'items[*].value')
-
-    Returns:
-        List of PathComponent objects
-    """
-    if "(" in field_path and ")" in field_path:
-        # Handle multiple field selection syntax
-        base_path, fields = field_path.split("(", 1)
-        fields = [f.strip() for f in fields.rstrip(")").split(",")]
-
-        # Check if base path has array access
-        if "[*]" in base_path:
-            base_name = base_path[: base_path.index("[")]
-            return [PathComponent(base_name, array_index="*", fields=fields)]
-        return [PathComponent(base_path.rstrip("."), fields=fields)]
-
-    components = []
-    current = ""
-    i = 0
-    while i < len(field_path):
-        char = field_path[i]
-        if char == "[":
-            if current:
-                # Start of array access
-                j = i + 1
-                while j < len(field_path) and field_path[j] != "]":
-                    j += 1
-                if j < len(field_path):
-                    index = field_path[i + 1 : j]
-                    array_index: Union[int, str] = index if index == "*" else int(index)
-                    components.append(PathComponent(current, array_index=array_index))
-                    i = j + 1
-                    current = ""
-                else:
-                    raise ValueError(f"Invalid array syntax in path: {field_path}")
-        elif char == ".":
-            if current:
-                components.append(PathComponent(current))
-                current = ""
-        else:
-            current += char
-        i += 1
-
-    if current:
-        components.append(PathComponent(current))
-
-    return components
-
-
-def _convert_path(field_path: str) -> str:
-    """
-    Convert our simplified path syntax to jsonpath-ng syntax.
-
-    Args:
-        field_path: Path in simplified format (e.g., 'items[0].name')
-
-    Returns:
-        Path in jsonpath-ng format
-    """
-    # Handle multiple field selection
-    if "(" in field_path and ")" in field_path:
-        base_path, fields = field_path.split("(", 1)
-        fields = [f.strip() for f in fields.rstrip(")").split(",")]
-        # Convert to jsonpath-ng multi-field syntax
-        return f"{base_path}[*].{{{','.join(fields)}}}"
-
-    # Convert array access syntax
-    # Replace [0] with [0] and [*] with [*]
-    parts = []
-    current = ""
-    i = 0
-    while i < len(field_path):
-        if field_path[i] == "[":
-            if current:
-                parts.append(current)
-                current = ""
-            # Find matching bracket
-            j = i + 1
-            while j < len(field_path) and field_path[j] != "]":
-                j += 1
-            if j < len(field_path):
-                index = field_path[i + 1 : j]
-                parts.append(f"[{index}]")
-                i = j + 1
-            else:
-                raise ValueError(f"Invalid array syntax in path: {field_path}")
-        elif field_path[i] == ".":
-            if current:
-                parts.append(current)
-                current = ""
-        else:
-            current += field_path[i]
-        i += 1
-
-    if current:
-        parts.append(current)
-
-    return ".".join(parts)
-
-
-def _get_nested_value(obj: Any, field_path: str) -> Any:
-    """
-    Get a nested value from an object using a simplified path syntax.
-
-    Args:
-        obj: The object to extract value from
-        field_path: Path expression. Supports:
-            - Direct field access: 'result_items'
-            - Dot notation: 'user.profile.name'
-            - Array indexing: 'items[0].id'
-            - Wildcard array: 'items[*].name'
-            - Multiple fields: 'items[*].(name,price)'
-
-    Returns:
-        The value(s) matching the path expression, or None if not found
-    """
-    try:
-        # Handle kwargs special case for function parameter access
-        if isinstance(obj, dict) and "kwargs" in obj:
-            obj = obj.get("kwargs", {})
-
-        logger.debug(f"Searching with path: {field_path}")
-        logger.debug(f"Object type: {type(obj)}")
-        logger.debug(f"Object content: {obj}")
-
-        # Parse the path into components
-        components = _parse_path(field_path)
-        logger.debug(f"Path components: {components}")
-
-        # Handle multiple field selection
-        if components and components[0].has_fields:
-            component = components[0]
-            # Get the array value first
-            array_value = None
-            if isinstance(obj, dict):
-                array_value = obj.get(component.name)
-            else:
-                array_value = getattr(obj, component.name, None)
-
-            if not isinstance(array_value, (list, tuple)):
-                return None
-
-            # Extract specified fields from each item
-            result = []
-            for item in array_value:
-                if item is None:
-                    result.append(None)
-                    continue
-                extracted = {}
-                for field in component.fields or []:  # Handle None fields
-                    field = field.strip()  # Ensure no whitespace
-                    if isinstance(item, dict):
-                        extracted[field] = item.get(field)
-                    else:
-                        extracted[field] = getattr(item, field, None)
-                result.append(extracted)
-            return result
-
-        # Process each path component
-        current_value = obj
-        for i, component in enumerate(components):
-            if current_value is None:
-                return None
-
-            # Get the value for this component
-            if isinstance(current_value, dict):
-                current_value = current_value.get(component.name)
-            else:
-                current_value = getattr(current_value, component.name, None)
-
-            # Handle array access if needed
-            if component.is_array_access:
-                if not isinstance(current_value, (list, tuple)):
-                    return None
-
-                if component.is_wildcard:
-                    # For wildcards, process remaining path for each item
-                    remaining_components = components[i + 1 :]
-                    if not remaining_components:
-                        # If this is the last component, return all values
-                        return current_value
-
-                    # Process remaining path for each item
-                    results = []
-                    for item in current_value:
-                        if item is None:
-                            results.append(None)
-                            continue
-                        # Recursively process remaining path
-                        remaining_path = ".".join(
-                            c.name + (f"[{c.array_index}]" if c.is_array_access else "")
-                            for c in remaining_components
-                        )
-                        result = _get_nested_value(item, remaining_path)
-                        results.append(result)
-                    return results
-                else:
-                    # Handle specific index access
-                    try:
-                        current_value = current_value[component.array_index]  # type: ignore
-                    except (IndexError, TypeError):
-                        return None
-
-        return current_value
-
-    except Exception as e:
-        logger.error(f"Error evaluating path '{field_path}': {e}")
-        return None
-
-
-def _to_json_compatible(obj: Any) -> Any:
-    """Convert any object to a JSON-compatible format."""
-    if obj is None:
-        return None
-
-    # Handle protobuf objects
-    if hasattr(obj, "DESCRIPTOR") or hasattr(obj, "_pb"):
-        try:
-            json_str = protobuf_to_json(obj)
-            return json.loads(json_str)
-        except Exception:
-            # If protobuf_to_json fails, try to get the value attribute
-            if hasattr(obj, "value"):
-                return _to_json_compatible(obj.value)
-            return str(obj)
-
-    # Handle dataclasses
-    if hasattr(obj, "__dataclass_fields__"):
-        return {
-            field: _to_json_compatible(getattr(obj, field))
-            for field in obj.__dataclass_fields__
-        }
-
-    # Handle enums
-    if isinstance(obj, Enum):
-        return obj.value
-
-    # Handle objects with to_dict method
-    if hasattr(obj, "to_dict"):
-        return _to_json_compatible(obj.to_dict())
-
-    # Handle objects with __dict__
-    if hasattr(obj, "__dict__"):
-        return _to_json_compatible(obj.__dict__)
-
-    # Handle lists and tuples
-    if isinstance(obj, (list, tuple)):
-        return [_to_json_compatible(item) for item in obj]
-
-    # Handle dictionaries
-    if isinstance(obj, dict):
-        return {key: _to_json_compatible(value) for key, value in obj.items()}
-
-    # Basic types (str, int, float, bool) are already JSON-compatible
-    return obj
-
-
-def _extract_fields(
-    obj: Any, field_paths: List[str]
-) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-    """
-    Extract specified fields using jsonpath-ng expressions.
-    First converts the object to a JSON-compatible format.
-
-    Args:
-        obj: Object to extract fields from
-        field_paths: List of path expressions to extract. Supports JSONPath syntax plus:
-            - Direct field access: 'result_items'
-            - Dot notation: 'user.profile.name'
-            - Array indexing: 'items[0].id'
-            - Wildcard array: 'items[*].name'
-            - Multiple fields: 'items[*].(field1, field2)'
-
-    Returns:
-        Dictionary with extracted fields
-    """
-    if obj is None:
-        return {}
-
-    # Convert object to JSON-compatible format
-    json_obj = _to_json_compatible(obj)
-
-    # Handle kwargs special case for function parameter access
-    if isinstance(json_obj, dict) and "kwargs" in json_obj:
-        json_obj = json_obj.get("kwargs", {})
-
-    result = {}
-    for path in field_paths:
-        try:
-            # Handle multiple field selection with parentheses
-            if "(" in path and ")" in path:
-                base_path, fields = path.split("(", 1)
-                # Clean up fields string and split by comma, handling spaces
-                fields = [f.strip() for f in fields.rstrip(")").split(",")]
-                # Remove any empty strings that might result from extra spaces
-                fields = [f for f in fields if f]
-
-                # Convert base path to JSONPath
-                if not base_path.startswith("$"):
-                    base_path = "$." + base_path
-
-                # Get base object(s) using parse_ext for better array handling
-                base_expr = parse_ext(base_path)
-                base_matches = base_expr.find(json_obj)
-
-                if not base_matches:
-                    continue
-
-                # Extract each field for each match
-                extracted = []
-                for match in base_matches:
-                    item = {}
-                    for field in fields:
-                        try:
-                            # Handle nested fields using parse_ext
-                            field_expr = parse_ext(f"$.{field}")
-                            field_matches = field_expr.find(match.value)
-                            if field_matches:
-                                item[field] = field_matches[0].value
-                            else:
-                                # Try direct attribute/dict access as fallback
-                                if isinstance(match.value, dict):
-                                    item[field] = match.value.get(field)
-                                else:
-                                    item[field] = getattr(match.value, field, None)
-                        except Exception as e:
-                            logger.debug(f"Error extracting field '{field}': {e}")
-                            item[field] = None
-                    extracted.append(item)
-
-                # Store result with original path (without $)
-                result[path] = extracted[0] if len(extracted) == 1 else extracted
-            else:
-                # Convert to JSONPath if needed
-                if not path.startswith("$"):
-                    jsonpath = "$." + path
-                else:
-                    jsonpath = path
-                    path = (
-                        path[2:] if path.startswith("$.") else path
-                    )  # Remove $. prefix
-
-                # Use extended parser for better array handling
-                expr = parse_ext(jsonpath)
-                matches = expr.find(json_obj)
-
-                if matches:
-                    values = [match.value for match in matches]
-                    result[path] = values[0] if len(values) == 1 else values
-
-        except Exception as e:
-            logger.error(f"Error extracting path '{path}': {e}")
-            continue
-
-    return result
-
-
 class CustomJSONEncoder(json.JSONEncoder):
-    """Custom JSON encoder that handles dataclasses, protobuf objects, and enums."""
+    """Custom JSON encoder to handle special objects."""
 
-    def default(self, obj):
-        # Handle protobuf objects
-        if hasattr(obj, "DESCRIPTOR") or hasattr(obj, "_pb"):
+    def default(self, obj: Any) -> Any:
+        if is_protobuf(obj):
+            return protobuf_to_dict(obj)
+        elif isinstance(obj, dict):
+            return {k: self.default(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self.default(item) for item in obj]
+        elif hasattr(obj, "to_dict"):
+            return self.default(obj.to_dict())
+        elif hasattr(obj, "__dataclass_fields__"):
+            return {
+                field: self.default(getattr(obj, field))
+                for field in obj.__dataclass_fields__
+            }
+        elif hasattr(obj, "__dict__"):
+            return self.default(obj.__dict__)
+        else:
             try:
-                json_str = protobuf_to_json(obj)
-                return json.loads(json_str)
-            except Exception:
-                # If protobuf_to_json fails, try to get the value attribute
-                if hasattr(obj, "value"):
-                    return self.default(obj.value)
+                return super().default(obj)
+            except TypeError:
                 return str(obj)
 
-        # Handle dataclasses
-        if hasattr(obj, "__dataclass_fields__"):
-            return {field: getattr(obj, field) for field in obj.__dataclass_fields__}
 
-        # Handle enums
-        if isinstance(obj, Enum):
-            return obj.value
+class Snapshotter:
+    def __init__(
+        self,
+        func: Any,
+        input_fields: Optional[List[str]] = None,
+        output_fields: Optional[List[str]] = None,
+    ):
+        self.func = func
+        self.input_fields = input_fields
+        self.output_fields = output_fields
+        self.session_id = self._get_or_create_session_id()
+        self.inner_calls = inner_calls_var.get() or []
+        self.is_outermost = not self.inner_calls
 
-        # Handle objects with to_dict method
-        if hasattr(obj, "to_dict"):
-            return obj.to_dict()
+    def _get_or_create_session_id(self) -> str:
+        session_id = session_id_var.get()
+        if session_id is None:
+            session_id = str(uuid.uuid4())
+            session_id_var.set(session_id)
+        return session_id
 
-        # Handle objects with __dict__
-        if hasattr(obj, "__dict__"):
-            return obj.__dict__
+    def _prepare_call_data(self, args: Any, kwargs: Any) -> Dict[str, Any]:
+        all_kwargs = inspect.getcallargs(self.func, *args, **kwargs)
+        return {
+            "FUNCTION": self.func.__name__,
+            "INPUTS": all_kwargs,
+            "OUTPUT": None,
+        }
 
-        # Let the base class handle the rest
-        return super().default(obj)
+    def _extract_field_values(self, data: Any, jsonpath_expr: str) -> List[Any]:
+        """Extract values from data using a single jsonpath expression."""
+        print(f"\n[EXTRACT] Expression: {jsonpath_expr}")
+        print(f"[EXTRACT] Data: {json.dumps(data, cls=CustomJSONEncoder, indent=2)}")
 
+        try:
+            matches = parse_ext(jsonpath_expr).find(data)
+            print(f"[MATCHES] Found {len(matches)} matches:")
+            for i, match in enumerate(matches):
+                print(f"  Match {i}:")
+                print(f"    Path: {match.path}")
+                print(f"    Value: {json.dumps(match.value, cls=CustomJSONEncoder)}")
+            return matches
+        except JSONPathError:
+            print("[ERROR] JSONPathError occurred")
+            return []
+        except Exception:
+            print("[ERROR] Unexpected error occurred")
+            return []
 
-def snapshot(input_fields=None, output_fields=None):
-    """
-    Decorator that logs inputs & outputs to a single debug file,
-    reading & writing session_id from a ContextVar.  Also handles
-    nested function calls.
-    """
+    def _update_result(
+        self, result: Dict[str, Any], clean_path: str, value: Any
+    ) -> None:
+        """Update the result dictionary with the value at the cleaned path."""
+        try:
+            target_expr = parse_ext(f"$.{clean_path}")
+            target_expr.update_or_create(result, value)
+        except Exception:
+            pass
 
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # --- Session ID Handling ---
-            session_id = session_id_var.get()
-            if session_id is None:
-                session_id = str(uuid.uuid4())
-                session_id_var.set(session_id)
+    def _extract_and_format_fields(
+        self, data: Any, fields: Optional[List[str]], is_input: bool
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Extract and format specified fields from the data using jsonpath_ng.
+        """
+        if not fields or data is None:
+            return None
 
-            # --- Inner Call Tracking ---
-            is_outermost = False
-            inner_calls = inner_calls_var.get()
-            if inner_calls is None:
-                is_outermost = True  # This is the top-level call
-                inner_calls = []
-                inner_calls_var.set(inner_calls)
+        # Convert data to dict once at the start
+        data_as_dict = json.loads(json.dumps(data, cls=CustomJSONEncoder))
+        result: Dict[str, Any] = {}
 
-            # --- Convert Args to Kwargs (for consistent field access) ---
+        for field_path in fields:
             try:
-                if isinstance(func, staticmethod):
-                    actual_func = func.__get__(None, type(None))
-                else:
-                    actual_func = func
-                sig = inspect.signature(actual_func)
-                param_names = list(sig.parameters.keys())
-                if param_names and param_names[0] in ("self", "cls"):
-                    param_names = param_names[1:]
-                # Create a new kwargs dict with positional args
-                all_kwargs = dict(zip(param_names, args))
-                # Update with provided kwargs
-                all_kwargs.update(kwargs)
-            except Exception as e:
-                logger.warning(f"Failed to get function parameters: {e}")
-                all_kwargs = kwargs
+                jsonpath_str = self._cleanse_field_path(field_path)
 
-            # --- Capture Input (before calling the function) ---
-            current_call_data = {
-                "function_name": func.__name__,
-                "input": {"kwargs": all_kwargs},  # Store kwargs directly
-                "output": None,  # Placeholder
-            }
+                expressions = jsonpath_str.split(" | ")
+                for expr in expressions:
+                    matches = self._extract_field_values(
+                        data_as_dict, expr
+                    )  # Pass in data_as_dict instead of data
+                    if not matches:
+                        continue
 
-            # --- Extract Input Fields (if specified) ---
-            extracted_input = None
-            if input_fields:
-                extracted_input = _extract_fields(
-                    current_call_data["input"], input_fields
-                )
+                    for match in matches:
+                        if match.value is not None:
+                            clean_path = str(match.full_path).replace(".[", "[")
+                            self._update_result(result, clean_path, match.value)
 
-            # --- Call the Function and Capture Output---
-            try:
-                result = func(*args, **kwargs)  # Use original args and kwargs
-                current_call_data["output"] = result  # Store raw result
-            except Exception as e:
-                current_call_data["output"] = {"error": str(e)}  # Capture exceptions
-                # --- Add to Inner Calls (if not outermost) ---
-                if not is_outermost:
-                    inner_calls.insert(0, current_call_data)  # Insert at beginning
-                # --- Debug Mode and File Writing (outermost only) ---
-                if (
-                    os.getenv("DEBUG", "").lower() in ("1", "true", "yes", "on")
-                    and is_outermost
+                self._clean_empty_structures(result)
+
+            except Exception:
+                continue
+
+        return result if result else None
+
+    def _clean_empty_structures(self, data: Any) -> None:
+        """Recursively remove empty structures (empty lists, dicts, None values)."""
+        if isinstance(data, dict):
+            # First clean nested structures
+            for key, value in list(data.items()):
+                if isinstance(value, (dict, list)):
+                    self._clean_empty_structures(value)
+
+                # Remove empty or None values
+                if value in (None, {}, []) or (
+                    isinstance(value, list) and all(v is None for v in value)
                 ):
-                    debug_dir = os.path.join(os.getcwd(), "debug_output")
-                    os.makedirs(debug_dir, exist_ok=True)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"{session_id}_{timestamp}.json"  # Simpler filename
-                    filepath = os.path.join(debug_dir, filename)
+                    del data[key]
 
-                    # --- Prepare Final Output (outermost function) ---
-                    final_output = {
-                        "input": (
-                            extracted_input
-                            if extracted_input
-                            else current_call_data["input"]
-                        ),
-                        "output": current_call_data["output"],
-                        "inner_function_calls": inner_calls,
-                    }
+        elif isinstance(data, list):
+            # Clean nested structures
+            for item in data:
+                if isinstance(item, (dict, list)):
+                    self._clean_empty_structures(item)
 
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        json.dump(
-                            final_output,
-                            f,
-                            indent=2,
-                            ensure_ascii=False,
-                            cls=CustomJSONEncoder,
-                        )
-                    logger.debug(f"Debug data written to {filepath}")
+            # Remove None values and empty structures
+            while None in data:
+                data.remove(None)
 
-                    # --- Reset inner_calls_var for next top-level call ---
-                    inner_calls_var.set(None)
-                raise  # Re-raise the exception
+            # Remove empty dictionaries and lists
+            data[:] = [item for item in data if item not in ({}, [])]
 
-            # --- Extract Output Fields (if specified) ---
-            extracted_output = None
-            if output_fields:
-                if is_outermost:
-                    # For outermost function, use the standard extraction
-                    extracted_output = _extract_fields(
-                        {"result": current_call_data["output"]}, output_fields
-                    )
-                else:
-                    # For inner functions, create the expected output format directly
-                    field_name = output_fields[
-                        0
-                    ]  # We know there's only one field for inner functions
-                    extracted_output = {field_name: current_call_data["output"]}
+    def _cleanse_field_path(self, field_path: str) -> str:
+        if field_path.startswith("args[") or "." in field_path:
+            if field_path.startswith("args["):
+                field_path = self._handle_args_syntax(field_path)
+            else:
+                field_path = self._handle_kwargs_syntax(field_path)
 
-            # --- Add to Inner Calls (if not outermost) ---
-            if not is_outermost:
-                if extracted_output:
-                    current_call_data["output"] = extracted_output
-                inner_calls.insert(0, current_call_data)  # Insert at beginning
+        if "(" in field_path and ")" in field_path:
+            field_path = self._handle_field_selection(field_path)
 
-            # --- Debug Mode and File Writing (outermost only) ---
-            if (
-                os.getenv("DEBUG", "").lower() in ("1", "true", "yes", "on")
-                and is_outermost
-            ):
-                debug_dir = os.path.join(os.getcwd(), "debug_output")
-                os.makedirs(debug_dir, exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{session_id}_{timestamp}.json"  # Simpler filename
-                filepath = os.path.join(debug_dir, filename)
+        return f"$.{field_path}"
 
-                # --- Prepare Final Output (outermost function) ---
-                final_output = {
-                    "input": (
-                        extracted_input
-                        if extracted_input
-                        else current_call_data["input"]
-                    ),
-                    "output": (
-                        extracted_output
-                        if extracted_output
-                        else current_call_data["output"]
-                    ),
-                    "inner_function_calls": inner_calls,
-                }
+    def _handle_args_syntax(self, field_path: str) -> str:
+        """Handle args[N] syntax in field paths."""
+        # Extract the argument index
+        arg_index = int(field_path[field_path.index("[") + 1 : field_path.index("]")])
 
-                with open(filepath, "w", encoding="utf-8") as f:
-                    json.dump(
-                        final_output,
-                        f,
-                        indent=2,
-                        ensure_ascii=False,
-                        cls=CustomJSONEncoder,
-                    )
-                logger.debug(f"Debug data written to {filepath}")
+        # Get the actual parameter name from inspect.signature
+        sig = inspect.signature(self.func)
+        param_names = list(sig.parameters.keys())
 
-                # --- Reset inner_calls_var for next top-level call ---
-                inner_calls_var.set(None)
+        # Extract the rest of the path after args[N]
+        rest_of_path = self._extract_rest_of_path(field_path)
 
+        # For *args parameter, keep the args[N] syntax
+        if any(param.kind == param.VAR_POSITIONAL for param in sig.parameters.values()):
+            return f"args[{arg_index}]" + (f".{rest_of_path}" if rest_of_path else "")
+
+        # For named parameters, use the parameter name
+        if arg_index < len(param_names):
+            return param_names[arg_index] + (f".{rest_of_path}" if rest_of_path else "")
+
+        return field_path
+
+    def _handle_kwargs_syntax(self, field_path: str) -> str:
+        """Handle kwargs syntax in field paths."""
+        sig = inspect.signature(self.func)
+        if any(param.kind == param.VAR_KEYWORD for param in sig.parameters.values()):
+            return f"kwargs.{field_path}"
+        return field_path
+
+    def _handle_field_selection(self, field_path: str) -> str:
+        """Handle (field1, field2) syntax in field paths."""
+        pre_paren = field_path[: field_path.index("(")]
+        post_paren = field_path[field_path.index(")") + 1 :]
+        fields_list = [
+            f.strip()
+            for f in field_path[
+                field_path.index("(") + 1 : field_path.index(")")
+            ].split(",")
+        ]
+
+        paths = [f"$.{pre_paren}['{field}']{post_paren}" for field in fields_list]
+        return " | ".join(paths)
+
+    def _extract_rest_of_path(self, field_path: str) -> str:
+        """Extract the path after args[N] and clean it."""
+        rest_of_path = field_path[field_path.index("]") + 1 :]
+        if rest_of_path.startswith("."):
+            rest_of_path = rest_of_path[1:]
+        return rest_of_path
+
+    def _write_output(self, data: Dict[str, Any]) -> None:
+        filename = f"debug_snapshots/{self.session_id}_{data['FUNCTION']}.json"
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        with open(filename, "w") as f:
+            json_string = json.dumps(data, cls=CustomJSONEncoder)
+            beautified_json = jsbeautifier.beautify(json_string)
+            f.write(beautified_json)
+
+    def _construct_final_output(self) -> Dict[str, Any]:
+        if self.inner_calls:
+            final_output = {
+                "FUNCTION": self.inner_calls[0]["FUNCTION"],
+                "INPUTS": self.inner_calls[0]["INPUTS"],
+                "OUTPUT": self.inner_calls[0]["OUTPUT"],
+            }
+            if "CALLS" in self.inner_calls[0] and self.inner_calls[0]["CALLS"]:
+                final_output["CALLS"] = self.inner_calls[0]["CALLS"]
+            return final_output
+        return {}
+
+    def _process_output_fields(self, result: Any) -> Any:
+        """Process output fields selection if specified, otherwise return original result."""
+        if not self.output_fields:
             return result
+
+        # Convert to dict for processing
+        result_dict = json.loads(json.dumps(result, cls=CustomJSONEncoder))
+
+        # For array access from root, don't wrap in _output
+        if any(field.startswith("[") for field in self.output_fields):
+            for field_path in self.output_fields:
+                try:
+                    matches = self._extract_field_values(result_dict, f"$.{field_path}")
+                    if matches:
+                        # For array outputs, build the array structure
+                        output_array = []
+                        current_idx = -1
+                        current_obj = {}
+
+                        for match in matches:
+                            if match.value is not None:
+                                # Get the parent object index from the path
+                                path_parts = str(match.full_path).split("[")
+                                if len(path_parts) > 1:
+                                    idx = int(path_parts[1].split("]")[0])
+                                    if idx != current_idx:
+                                        if current_obj and current_idx >= 0:
+                                            output_array.append(current_obj)
+                                        current_obj = {}
+                                        current_idx = idx
+
+                                # Add the field to the current object
+                                field_name = str(match.path).split(".")[-1]
+                                current_obj[field_name] = match.value
+
+                        # Add the last object if exists
+                        if current_obj:
+                            output_array.append(current_obj)
+
+                        return output_array
+                except Exception as e:
+                    print(f"Error processing array output: {e}")
+                    continue
+            return result
+
+        # Create a wrapper dict to use existing field selection logic
+        wrapped_result = {"_output": result_dict}
+
+        # Modify field paths to work with wrapper
+        modified_fields = [f"_output.{field}" for field in self.output_fields]
+
+        # Use existing field selection logic
+        extracted = self._extract_and_format_fields(
+            wrapped_result, modified_fields, False
+        )
+
+        if not extracted or "_output" not in extracted:
+            return result
+
+        return extracted["_output"]
+
+    def capture(self, *args: Any, **kwargs: Any) -> Any:
+        current_call_data = self._prepare_call_data(args, kwargs)
+        parent_call_data = self.inner_calls[-1] if not self.is_outermost else None
+
+        self.inner_calls = self.inner_calls + [current_call_data]
+        inner_calls_var.set(self.inner_calls)
+
+        extracted_input = self._extract_and_format_fields(
+            current_call_data["INPUTS"], self.input_fields, True
+        )
+        current_call_data["INPUTS"] = (
+            extracted_input if extracted_input else current_call_data["INPUTS"]
+        )
+
+        try:
+            # Get the original result
+            result = self.func(*args, **kwargs)
+
+            # Process output fields for debug snapshot only
+            current_call_data["OUTPUT"] = self._process_output_fields(result)
+
+        except Exception as e:
+            current_call_data["OUTPUT"] = {
+                "error": {"type": e.__class__.__name__, "message": str(e)}
+            }
+            if not self.is_outermost and parent_call_data is not None:
+                if "CALLS" not in parent_call_data:
+                    parent_call_data["CALLS"] = []
+                parent_call_data["CALLS"].append(current_call_data)
+            if self.is_outermost:
+                final_output = self._construct_final_output()
+                self._write_output(final_output)
+            raise
+
+        if not self.is_outermost:
+            if parent_call_data is not None:
+                if "CALLS" not in parent_call_data:
+                    parent_call_data["CALLS"] = []
+                parent_call_data["CALLS"].append(current_call_data)
+                self.inner_calls = self.inner_calls[:-1]
+                inner_calls_var.set(self.inner_calls)
+        else:
+            final_output = self._construct_final_output()
+            self._write_output(final_output)
+            inner_calls_var.set([])
+
+        # Always return the original unmodified result
+        return result
+
+
+def snapshot(
+    input_fields: Optional[List[str]] = None, output_fields: Optional[List[str]] = None
+) -> Any:
+    """Decorator for capturing function inputs and outputs."""
+
+    def decorator(func: Any) -> Any:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if os.environ.get("DEBUG", "false").lower() != "true":
+                return func(*args, **kwargs)
+
+            snapshotter = Snapshotter(func, input_fields, output_fields)
+            return snapshotter.capture(*args, **kwargs)
 
         return wrapper
 

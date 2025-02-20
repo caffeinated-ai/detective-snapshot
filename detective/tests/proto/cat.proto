@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package detective.tests;
+
+// Enum for cat colors
+enum CatColor {
+    unspecified = 0;  // Default value in proto3 must be 0
+    calico = 1;
+    tuxedo = 2;
+    void = 3;
+}
+
+// Activity message with all possible trait fields
+message Activity {
+    string name = 1;
+    optional string cuteness = 2;
+    optional string adorableness = 3;
+    optional string goofiness = 4;
+    optional string stealth = 5;
+    optional string friendliness = 6;
+}
+
+// Cat message with all fields
+message Cat {
+    string name = 1;
+    CatColor color = 2;  // Using enum instead of string
+    repeated string foods = 3;
+    repeated Activity activities = 4;
+}

@@ -1,0 +1,56 @@
+{
+    "FUNCTION": "life",
+    "INPUTS": {
+        "cat": {
+            "name": "Coco",
+            "color": "calico",
+            "foods": ["sushi", "salmon", "tuna"],
+            "activities": [{
+                "name": "sunbathing",
+                "cuteness": "purrfectly_toasty"
+            }, {
+                "name": "brushing",
+                "adorableness": "melts_like_butter"
+            }]
+        }
+    },
+    "OUTPUT": ["Coco", "is", "happy"],
+    "CALLS": [{
+        "FUNCTION": "eat",
+        "INPUTS": {
+            "foods": ["sushi", "salmon", "tuna"]
+        },
+        "OUTPUT": "sushi"
+    }, {
+        "FUNCTION": "play",
+        "INPUTS": {
+            "activities": [{
+                "name": "sunbathing",
+                "cuteness": "purrfectly_toasty"
+            }, {
+                "name": "brushing",
+                "adorableness": "melts_like_butter"
+            }]
+        },
+        "OUTPUT": 2,
+        "CALLS": [{
+            "FUNCTION": "do",
+            "INPUTS": {
+                "activity": {
+                    "name": "sunbathing",
+                    "cuteness": "purrfectly_toasty"
+                }
+            },
+            "OUTPUT": "sunbathing"
+        }, {
+            "FUNCTION": "do",
+            "INPUTS": {
+                "activity": {
+                    "name": "brushing",
+                    "adorableness": "melts_like_butter"
+                }
+            },
+            "OUTPUT": "brushing"
+        }]
+    }]
+}

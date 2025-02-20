@@ -1,0 +1,30 @@
+{
+    "FUNCTION": "outer",
+    "INPUTS": {},
+    "OUTPUT": {
+        "error": {
+            "type": "ValueError",
+            "message": "Something went wrong!"
+        }
+    },
+    "CALLS": [{
+        "FUNCTION": "inner",
+        "INPUTS": {},
+        "OUTPUT": {
+            "error": {
+                "type": "ValueError",
+                "message": "Something went wrong!"
+            }
+        },
+        "CALLS": [{
+            "FUNCTION": "problematic",
+            "INPUTS": {},
+            "OUTPUT": {
+                "error": {
+                    "type": "ValueError",
+                    "message": "Something went wrong!"
+                }
+            }
+        }]
+    }]
+}

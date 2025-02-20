@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "detective-snapshot"
-version = "0.1.0"  # Consider using dynamic versioning
+name = "detective-snapshot"  # Keep the PyPI package name as detective-snapshot
+version = "0.1.1"
 description = "A package for capturing and comparing function input/output snapshots"
 readme = "README.md"
 requires-python = ">=3.7"
@@ -27,16 +27,17 @@ dependencies = [
     "jsonpath-ng",
 ]
 
-dynamic = ["version"]
+[tool.hatch.build.targets.wheel]
+packages = ["detective"]  # Changed to detective - this controls the import name
 
 [project.urls]
 "Source Code" = "https://github.com/caffeinated-ai/detective-snapshot"
 
 [tool.setuptools.packages.find]
-where = ["."]  # Find packages in the root directory
+where = ["."]
 
 [tool.ruff]
-line-length = 88
+line-length = 125
 target-version = "py37"
 
 [tool.ruff.lint]
@@ -47,15 +48,13 @@ select = [
     "C",   # flake8-comprehensions
     "UP",  # pyupgrade
 ]
-ignore = ["C901"]  # Function is too complex
+ignore = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["detective"]
 
 [tool.ruff.lint.per-file-ignores]
-"detective/tests/*" = ["S101"]  # Allow assert in tests
-"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
+"detective/tests/*" = [
+    "S101",
+    "F401",
+]

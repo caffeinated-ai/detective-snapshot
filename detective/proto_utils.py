@@ -1,26 +1,48 @@
-import json
-import logging
-from typing import Type, TypeVar, Union, Any
+from typing import Any, Protocol, TypeVar, Union
 
-from google.protobuf.json_format import MessageToDict, Parse
+from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
 
-logger = logging.getLogger(__name__)
-
-# Generic type for protobuf messages or wrappers that must be a subclass of Message
+# Generic type for protobuf messages or wrappers
 T = TypeVar("T", bound=Union[Message, object])
 
 
-def protobuf_to_json(proto_obj: Any) -> str:
+class HasProtobuf(Protocol):
+    """Protocol for objects that wrap a protobuf message."""
+
+    _pb: Message
+
+
+def is_protobuf(obj: Any) -> bool:
+    """Check if an object is a protobuf message.
+
+    Args:
+        obj: Object to check
+
+    Returns:
+        True if the object is a protobuf message, False otherwise
     """
-    Convert a protobuf message to a JSON string.
-    Handles objects with ._pb attribute (like VideoAnnotationResults).
+    # Check for standard protobuf DESCRIPTOR attribute
+    if hasattr(obj, "DESCRIPTOR"):
+        return True
+
+    # Check for _pb attribute (used in some protobuf implementations)
+    if hasattr(obj, "_pb") and isinstance(obj._pb, Message):
+        return True
+
+    return False
+
+
+def protobuf_to_dict(proto_obj: Union[Message, HasProtobuf]) -> dict:
+    """
+    Convert a protobuf message to a dictionary.
+    Handles objects with ._pb attribute.
 
     Args:
         proto_obj: The protobuf message to convert
 
     Returns:
-        JSON string representation of the protobuf message
+        Dictionary representation of the protobuf message
 
     Raises:
         Exception: If conversion fails
@@ -28,50 +50,14 @@ def protobuf_to_json(proto_obj: Any) -> str:
     try:
         # Handle objects that wrap protobuf with ._pb
         if hasattr(proto_obj, "_pb"):
-            proto_obj = proto_obj._pb
+            proto_obj = proto_obj._pb  # type: ignore
 
-        # Convert to dict first
-        dict_obj = MessageToDict(
+        # Convert to dict
+        return MessageToDict(
             proto_obj,  # type: ignore
             preserving_proto_field_name=True,
             use_integers_for_enums=False,
         )
 
-        # Convert dict to JSON string
-        return json.dumps(dict_obj, indent=4, ensure_ascii=False)
-
-    except Exception as e:
-        logger.error(f"Error converting protobuf to JSON: {e}")
-        raise
-
-
-def json_to_protobuf(json_str: str, message_type: Type[T]) -> T:
-    """
-    Convert a JSON string back to a protobuf message.
-    For types that wrap protobuf (like VideoAnnotationResults), returns the wrapper.
-
-    Args:
-        json_str: The JSON string to convert
-        message_type: The target protobuf message type
-
-    Returns:
-        Instance of the specified message type
-
-    Raises:
-        Exception: If conversion fails
-    """
-    try:
-        # Create a new instance of the message type
-        message = message_type()
-
-        # If it's a wrapper type (has ._pb), parse into the internal protobuf
-        if hasattr(message, "_pb"):
-            Parse(json_str, message._pb)
-        else:
-            Parse(json_str, message)  # type: ignore
-
-        return message
-
-    except Exception as e:
-        logger.error(f"Error converting JSON to protobuf: {e}")
+    except Exception:
         raise
