@@ -172,16 +172,14 @@ This will produce a snapshot similar to:
 {
     "FUNCTION": "outer_function",
     "INPUTS": {},
-    "OUTPUT": null, // or {} depending on if there's a return before the exception
+    "OUTPUT": null,
     "CALLS": [
         {
             "FUNCTION": "inner_function",
             "INPUTS": {},
-            "OUTPUT": {
-                "error": {
-                    "type": "ValueError",
-                    "message": "This is an example error."
-                }
+            "ERROR": {
+                "type": "ValueError",
+                "message": "This is an example error."
             }
         }
     ]
@@ -230,10 +228,6 @@ The resulting snapshots will capture the relevant `self`, `cls`, and other param
 ## Contributing
 
 Contributions are welcome! Please check out our [Contributing Guide](CONTRIBUTING.md) for details.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
 
 ## License
 
