@@ -4,7 +4,15 @@ import difflib
 import inspect
 import json
 import os
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
+
+# Add these constants at the top
+TEST_HASHES = {
+    "default": "abc123d",
+    "second": "efg456h",
+    "third": "hij789k",
+    "fourth": "lmn012p",
+}
 
 
 def get_debug_file(mock_uuid_str: str) -> Tuple[str, Dict[str, Any]]:
@@ -16,15 +24,36 @@ def get_debug_file(mock_uuid_str: str) -> Tuple[str, Dict[str, Any]]:
     Returns:
         Tuple of (file path, file contents as dict)
     """
-    debug_dir = os.path.join(os.getcwd(), "debug_snapshots")
-    debug_files = [
-        f
-        for f in os.listdir(debug_dir)
-        if f.endswith(".json") and f.startswith(mock_uuid_str)
-    ]
-    assert len(debug_files) == 1, "Expected exactly one debug file."
+    base_dir = os.path.join(os.getcwd(), "_snapshots")
+    if not os.path.exists(base_dir):
+        raise AssertionError(f"Snapshots directory not found: {base_dir}")
 
-    filepath = os.path.join(debug_dir, debug_files[0])
+    matching_files = []
+
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith(".json") and mock_uuid_str in file:
+                matching_files.append(os.path.join(root, file))
+
+    if not matching_files:
+        # List all files that were found to help debugging
+        all_files = []
+        for _, _, files in os.walk(base_dir):
+            for file in files:
+                if file.endswith(".json"):
+                    all_files.append(file)
+        raise AssertionError(
+            f"No debug file found with UUID {mock_uuid_str}. "
+            f"Found files: {all_files}"
+        )
+
+    if len(matching_files) > 1:
+        raise AssertionError(
+            f"Expected exactly one debug file, found {len(matching_files)}: "
+            f"{matching_files}"
+        )
+
+    filepath = matching_files[0]
     with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
 
@@ -125,19 +154,53 @@ def are_snapshots_equal(actual: Any, expected: Any) -> bool:
 
 
 def setup_debug_dir() -> None:
-    """Setup/cleanup the debug snapshots directory and reset context vars."""
-    from detective.snapshot import inner_calls_var, session_id_var
+    """Setup/cleanup the snapshots directory and reset context vars."""
+    from detective.snapshot import (
+        inner_calls_var,
+        session_id_var,
+        session_start_time_var,
+    )
 
+    # Reset context vars
     inner_calls_var.set([])
     session_id_var.set(None)
+    session_start_time_var.set(None)
 
-    debug_dir = os.path.join(os.getcwd(), "debug_snapshots")
-    if os.path.exists(debug_dir):
-        for file in os.listdir(debug_dir):
-            file_path = os.path.join(debug_dir, file)
-            try:
-                os.remove(file_path)
-            except OSError:
-                pass
-    else:
-        os.makedirs(debug_dir)
+    # Clean up _snapshots directory
+    snapshots_dir = os.path.join(os.getcwd(), "_snapshots")
+    if os.path.exists(snapshots_dir):
+        for root, dirs, files in os.walk(snapshots_dir, topdown=False):
+            for name in files:
+                os.remove(os.path.join(root, name))
+            for name in dirs:
+                os.rmdir(os.path.join(root, name))
+        try:
+            os.rmdir(snapshots_dir)
+        except OSError:
+            pass
+    os.makedirs(snapshots_dir)
+
+
+def mock_hash_sequence(count: int = 1) -> List[str]:
+    """Get a sequence of test hashes.
+
+    Args:
+        count: Number of hashes needed
+
+    Returns:
+        List of test hashes
+    """
+    all_hashes = list(TEST_HASHES.values())
+    return all_hashes[:count]
+
+
+def get_test_hash(key: str = "default") -> str:
+    """Get a consistent test hash.
+
+    Args:
+        key: Which test hash to use
+
+    Returns:
+        Test hash string
+    """
+    return TEST_HASHES[key]

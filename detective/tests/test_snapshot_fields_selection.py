@@ -19,7 +19,7 @@ from .fixtures_data import (
     JaggerDataclass,
     JaggerProto,
 )
-from .utils import are_snapshots_equal, get_debug_file, setup_debug_dir
+from .utils import are_snapshots_equal, get_debug_file, setup_debug_dir, get_test_hash
 
 # Split the test cases into arrays based on input patterns
 SINGLE_INPUT_TEST_CASES = [
@@ -519,11 +519,10 @@ class TestSnapshotFieldSelection:
         SINGLE_INPUT_TEST_CASES,
         ids=[case["name"] for case in SINGLE_INPUT_TEST_CASES],
     )
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_field_selection_dict(self, mock_uuid, test_case):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_field_selection_dict(self, mock_hash, test_case):
         """Test field selection patterns with dictionary input."""
-        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         @snapshot(input_fields=test_case["input_fields"])
         def func(cats: dict) -> bool:
@@ -532,7 +531,7 @@ class TestSnapshotFieldSelection:
         # Run the function with CatData_dict
         assert func(CatData_dict)
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "func",
             "INPUTS": test_case["expected_input"],
@@ -545,11 +544,10 @@ class TestSnapshotFieldSelection:
         ARGS_TEST_CASES,
         ids=[case["name"] for case in ARGS_TEST_CASES],
     )
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_field_selection_args(self, mock_uuid, test_case):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_field_selection_args(self, mock_hash, test_case):
         """Test field selection patterns with args/kwargs."""
-        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         @snapshot(input_fields=test_case["input_fields"])
         def func(*args, **kwargs) -> bool:
@@ -559,7 +557,7 @@ class TestSnapshotFieldSelection:
         kwargs = test_case.get("kwargs", {})
         assert func(*args, **kwargs)
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "func",
             "INPUTS": test_case["expected_input"],
@@ -573,11 +571,10 @@ class TestSnapshotFieldSelection:
         ARRAY_TEST_CASES,
         ids=[case["name"] for case in ARRAY_TEST_CASES],
     )
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_field_selection_arrays(self, mock_uuid, test_case):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_field_selection_arrays(self, mock_hash, test_case):
         """Test field selection patterns with array inputs."""
-        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         @snapshot(input_fields=test_case["input_fields"])
         def func(cats: List[Any]) -> bool:
@@ -586,7 +583,7 @@ class TestSnapshotFieldSelection:
         # Run the function with the test input data
         assert func(test_case["input_data"])
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "func",
             "INPUTS": test_case["expected_input"],
@@ -599,11 +596,10 @@ class TestSnapshotFieldSelection:
         MIXED_OBJECTS_TEST_CASES,
         ids=[case["name"] for case in MIXED_OBJECTS_TEST_CASES],
     )
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_field_selection_mixed_objects(self, mock_uuid, test_case):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_field_selection_mixed_objects(self, mock_hash, test_case):
         """Test field selection patterns with mixed object types."""
-        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         @snapshot(input_fields=test_case["input_fields"])
         def func(data: Any) -> bool:
@@ -612,7 +608,7 @@ class TestSnapshotFieldSelection:
         # Run the function with the test input data
         assert func(test_case["input_data"])
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "func",
             "INPUTS": test_case["expected_input"],
@@ -625,11 +621,10 @@ class TestSnapshotFieldSelection:
         OUTPUT_FIELDS_TEST_CASES,
         ids=[case["name"] for case in OUTPUT_FIELDS_TEST_CASES],
     )
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_field_selection_outputs(self, mock_uuid, test_case):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_field_selection_outputs(self, mock_hash, test_case):
         """Test field selection patterns for function outputs."""
-        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         @snapshot(output_fields=test_case["output_fields"])
         def func() -> Any:
@@ -639,7 +634,7 @@ class TestSnapshotFieldSelection:
         result = func()
         assert result == test_case["return_value"]  # Original function output unchanged
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "func",
             "INPUTS": {},
@@ -647,11 +642,10 @@ class TestSnapshotFieldSelection:
         }
         assert are_snapshots_equal(actual_data, expected_data)
 
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_instance_method_without_self(self, mock_uuid):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_instance_method_without_self(self, mock_hash):
         """Test that 'self' is not included when not in input_fields."""
-        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         class MyClass:
             def __init__(self, a):
@@ -668,7 +662,7 @@ class TestSnapshotFieldSelection:
 
         assert func(instance, 10, 20) == 35
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "func",
             "INPUTS": {"x": 10},
@@ -676,11 +670,10 @@ class TestSnapshotFieldSelection:
         }
         assert are_snapshots_equal(actual_data, expected_data)
 
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_class_method_without_cls(self, mock_uuid):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_class_method_without_cls(self, mock_hash):
         """Test that 'cls' is not included when not in input_fields."""
-        mock_uuid_str = "12345678-1234-5678-1234-567812345678"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         class MyClass:
             class_variable = 10
@@ -695,7 +688,7 @@ class TestSnapshotFieldSelection:
 
         assert func(5, 15) == 30
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "func",
             "INPUTS": {"y": 15},
