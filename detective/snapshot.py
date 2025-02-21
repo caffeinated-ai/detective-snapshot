@@ -31,9 +31,9 @@ class CustomJSONEncoder(json.JSONEncoder):
         if is_protobuf(obj):
             return protobuf_to_dict(obj)
         elif isinstance(obj, dict):
-            return {k: self.default(v) for k, v in obj.items()}
+            return {k: self._convert_value(v) for k, v in obj.items()}
         elif isinstance(obj, list):
-            return [self.default(item) for item in obj]
+            return [self._convert_value(item) for item in obj]
         elif hasattr(obj, "to_dict"):
             return self.default(obj.to_dict())
         elif hasattr(obj, "__dataclass_fields__"):
@@ -43,10 +43,17 @@ class CustomJSONEncoder(json.JSONEncoder):
             }
         # Special handling for class objects (cls parameter in class methods)
         elif isinstance(obj, type):
+            # Only include non-internal attributes that are relevant for debugging
             return {
-                k: self.default(v)
+                k: self._convert_value(v)
                 for k, v in obj.__dict__.items()
-                if not k.startswith("__")  # Skip internal attributes
+                if (
+                    not k.startswith("__")  # Skip internal attributes
+                    and not callable(v)  # Skip methods
+                    and not isinstance(
+                        v, (staticmethod, classmethod)
+                    )  # Skip decorators
+                )
             }
         elif hasattr(obj, "__dict__"):
             return self.default(obj.__dict__)
@@ -55,6 +62,12 @@ class CustomJSONEncoder(json.JSONEncoder):
                 return super().default(obj)
             except TypeError:
                 return str(obj)
+
+    def _convert_value(self, value: Any) -> Any:
+        """Helper method to convert values while preserving numeric types."""
+        if isinstance(value, (int, float)):
+            return value  # Keep numeric values as-is
+        return self.default(value)
 
 
 class Snapshotter:
@@ -92,22 +105,12 @@ class Snapshotter:
 
     def _extract_field_values(self, data: Any, jsonpath_expr: str) -> List[Any]:
         """Extract values from data using a single jsonpath expression."""
-        print(f"\n[EXTRACT] Expression: {jsonpath_expr}")
-        print(f"[EXTRACT] Data: {json.dumps(data, cls=CustomJSONEncoder, indent=2)}")
-
         try:
             matches = parse_ext(jsonpath_expr).find(data)
-            print(f"[MATCHES] Found {len(matches)} matches:")
-            for i, match in enumerate(matches):
-                print(f"  Match {i}:")
-                print(f"    Path: {match.path}")
-                print(f"    Value: {json.dumps(match.value, cls=CustomJSONEncoder)}")
             return matches
         except JSONPathError:
-            print("[ERROR] JSONPathError occurred")
             return []
         except Exception:
-            print("[ERROR] Unexpected error occurred")
             return []
 
     def _update_result(
@@ -259,8 +262,14 @@ class Snapshotter:
             final_output = {
                 "FUNCTION": self.inner_calls[0]["FUNCTION"],
                 "INPUTS": self.inner_calls[0]["INPUTS"],
-                "OUTPUT": self.inner_calls[0]["OUTPUT"],
             }
+
+            # Add either OUTPUT or ERROR, but not both
+            if "ERROR" in self.inner_calls[0]:
+                final_output["ERROR"] = self.inner_calls[0]["ERROR"]
+            elif "OUTPUT" in self.inner_calls[0]:
+                final_output["OUTPUT"] = self.inner_calls[0]["OUTPUT"]
+
             if "CALLS" in self.inner_calls[0] and self.inner_calls[0]["CALLS"]:
                 final_output["CALLS"] = self.inner_calls[0]["CALLS"]
             return final_output
@@ -307,7 +316,6 @@ class Snapshotter:
 
                         return output_array
                 except Exception as e:
-                    print(f"Error processing array output: {e}")
                     continue
             return result
 
@@ -352,8 +360,12 @@ class Snapshotter:
             logger.exception(
                 f"Error in snapshot capture for function {self.func.__name__}: {str(e)}"
             )
-            current_call_data["OUTPUT"] = {
-                "error": {"type": e.__class__.__name__, "message": str(e)}
+            # Update error format - make it top level and remove OUTPUT
+            if "OUTPUT" in current_call_data:
+                del current_call_data["OUTPUT"]
+            current_call_data["ERROR"] = {
+                "type": e.__class__.__name__,
+                "message": str(e),
             }
             if not self.is_outermost and parent_call_data is not None:
                 if "CALLS" not in parent_call_data:
