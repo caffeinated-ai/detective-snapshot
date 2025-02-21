@@ -161,7 +161,7 @@ This will produce a snapshot similar to:
 {
     "FUNCTION": "outer_function",
     "INPUTS": {},
-    "OUTPUT": null, // or {} depending on if there's a return before the exception
+    "OUTPUT": null,
     "CALLS": [
         {
             "FUNCTION": "inner_function",
