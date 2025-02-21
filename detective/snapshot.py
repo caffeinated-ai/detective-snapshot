@@ -41,6 +41,13 @@ class CustomJSONEncoder(json.JSONEncoder):
                 field: self.default(getattr(obj, field))
                 for field in obj.__dataclass_fields__
             }
+        # Special handling for class objects (cls parameter in class methods)
+        elif isinstance(obj, type):
+            return {
+                k: self.default(v)
+                for k, v in obj.__dict__.items()
+                if not k.startswith("__")  # Skip internal attributes
+            }
         elif hasattr(obj, "__dict__"):
             return self.default(obj.__dict__)
         else:
@@ -60,15 +67,19 @@ class Snapshotter:
         self.func = func
         self.input_fields = input_fields
         self.output_fields = output_fields
-        self.session_id = self._get_or_create_session_id()
         self.inner_calls = inner_calls_var.get() or []
         self.is_outermost = not self.inner_calls
 
+        # Reset session ID only for outermost calls
+        if self.is_outermost:
+            session_id_var.set(str(uuid.uuid4()))
+        self.session_id = session_id_var.get()
+
     def _get_or_create_session_id(self) -> str:
+        # Remove this method as we handle session ID in __init__
         session_id = session_id_var.get()
         if session_id is None:
-            session_id = str(uuid.uuid4())
-            session_id_var.set(session_id)
+            raise RuntimeError("Session ID not initialized")
         return session_id
 
     def _prepare_call_data(self, args: Any, kwargs: Any) -> Dict[str, Any]:
@@ -323,14 +334,14 @@ class Snapshotter:
         self.inner_calls = self.inner_calls + [current_call_data]
         inner_calls_var.set(self.inner_calls)
 
-        extracted_input = self._extract_and_format_fields(
-            current_call_data["INPUTS"], self.input_fields, True
-        )
-        current_call_data["INPUTS"] = (
-            extracted_input if extracted_input else current_call_data["INPUTS"]
-        )
-
         try:
+            extracted_input = self._extract_and_format_fields(
+                current_call_data["INPUTS"], self.input_fields, True
+            )
+            current_call_data["INPUTS"] = (
+                extracted_input if extracted_input else current_call_data["INPUTS"]
+            )
+
             # Get the original result
             result = self.func(*args, **kwargs)
 
@@ -338,6 +349,9 @@ class Snapshotter:
             current_call_data["OUTPUT"] = self._process_output_fields(result)
 
         except Exception as e:
+            logger.exception(
+                f"Error in snapshot capture for function {self.func.__name__}: {str(e)}"
+            )
             current_call_data["OUTPUT"] = {
                 "error": {"type": e.__class__.__name__, "message": str(e)}
             }
@@ -374,7 +388,7 @@ def snapshot(
     def decorator(func: Any) -> Any:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if os.environ.get("DEBUG", "false").lower() != "true":
+            if os.environ.get("DEBUG", None) not in ("true", "1"):
                 return func(*args, **kwargs)
 
             snapshotter = Snapshotter(func, input_fields, output_fields)

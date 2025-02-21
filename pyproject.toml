@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "detective-snapshot"  # Keep the PyPI package name as detective-snapshot
-version = "0.1.1"
+version = "0.1.3"
 description = "A package for capturing and comparing function input/output snapshots"
 readme = "README.md"
 requires-python = ">=3.7"
@@ -39,6 +39,9 @@ where = ["."]
 [tool.ruff]
 line-length = 125
 target-version = "py37"
+exclude = [
+    "*_pb2.py",
+]
 
 [tool.ruff.lint]
 select = [
