@@ -400,7 +400,7 @@ def snapshot(
     def decorator(func: Any) -> Any:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if os.environ.get("DEBUG", None) not in ("true", "1"):
+            if os.environ.get("DEBUG", "false").lower() not in ("true", "1"):
                 return func(*args, **kwargs)
 
             snapshotter = Snapshotter(func, input_fields, output_fields)
