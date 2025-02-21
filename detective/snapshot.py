@@ -315,7 +315,7 @@ class Snapshotter:
                             output_array.append(current_obj)
 
                         return output_array
-                except Exception as e:
+                except Exception:
                     continue
             return result
 
