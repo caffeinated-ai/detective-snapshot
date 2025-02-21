@@ -11,12 +11,12 @@ from .fixtures_data import CocoCat
 from .utils import (
     are_snapshots_equal,
     get_debug_file,
+    get_test_hash,
     get_test_name,
     load_expected_data,
+    mock_hash_sequence,
     setup_debug_dir,
     update_expected_data,
-    get_test_hash,
-    mock_hash_sequence,
 )
 
 
@@ -46,22 +46,6 @@ def life(cat):
     eat(cat["foods"])
     play(cat["activities"])  # Inner function call
     return (cat_name, "is", "happy")
-
-
-@pytest.fixture(autouse=True)
-def setup_module():
-    """Setup for each test."""
-    os.environ["DEBUG"] = "true"
-    # Clean up any existing debug output
-    debug_dir = os.path.join(os.getcwd(), "debug_snapshots")
-    if os.path.exists(debug_dir):
-        for file in os.listdir(debug_dir):
-            os.remove(os.path.join(debug_dir, file))
-    else:
-        os.makedirs(debug_dir)
-    yield
-    session_id_var.set(None)
-    inner_calls_var.set([])
 
 
 class TestSnapshotFunctionNesting:
@@ -213,11 +197,15 @@ class TestSnapshotFunctionNesting:
             return y * 10
 
         # First call with x=5
-        result1 = outer(5)  # First call: 5 * 10 = 50, Second call: 10 * 10 = 100, Total: 150
+        result1 = outer(
+            5
+        )  # First call: 5 * 10 = 50, Second call: 10 * 10 = 100, Total: 150
         assert result1 == 150
 
         # Second call with x=3
-        result2 = outer(3)  # First call: 3 * 10 = 30, Second call: 6 * 10 = 60, Total: 90
+        result2 = outer(
+            3
+        )  # First call: 3 * 10 = 30, Second call: 6 * 10 = 60, Total: 90
         assert result2 == 90
 
         # Check first call's debug file
@@ -248,12 +236,13 @@ class TestSnapshotFunctionNesting:
 
         # Verify that two debug files were created
         debug_dir = os.path.join(os.getcwd(), "_snapshots")
-        debug_files = sorted([f for f in os.listdir(debug_dir) if f.startswith("outer_")])
+        debug_files = sorted(
+            [f for f in os.listdir(debug_dir) if f.startswith("outer_")]
+        )
         assert len(debug_files) == 2
 
         # Verify the filenames match our expected pattern
         expected_hashes = [get_test_hash(), get_test_hash("second")]
         assert all(
-            any(f.endswith(f"_{h}.json") for h in expected_hashes)
-            for f in debug_files
+            any(f.endswith(f"_{h}.json") for h in expected_hashes) for f in debug_files
         ), f"Files {debug_files} don't match expected hash patterns"
