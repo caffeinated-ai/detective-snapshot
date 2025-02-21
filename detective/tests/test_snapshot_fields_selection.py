@@ -646,3 +646,59 @@ class TestSnapshotFieldSelection:
             "OUTPUT": test_case["expected_output"],
         }
         assert are_snapshots_equal(actual_data, expected_data)
+
+    @patch("detective.snapshot.uuid.uuid4")
+    def test_instance_method_without_self(self, mock_uuid):
+        """Test that 'self' is not included when not in input_fields."""
+        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
+        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+
+        class MyClass:
+            def __init__(self, a):
+                self.a = a
+
+            def instance_method(self, x, y):
+                return x + y + self.a
+
+        instance = MyClass(5)
+
+        @snapshot(input_fields=["x"])
+        def func(instance, x, y):
+            return instance.instance_method(x, y)
+
+        assert func(instance, 10, 20) == 35
+
+        _, actual_data = get_debug_file(mock_uuid_str)
+        expected_data = {
+            "FUNCTION": "func",
+            "INPUTS": {"x": 10},
+            "OUTPUT": 35,
+        }
+        assert are_snapshots_equal(actual_data, expected_data)
+
+    @patch("detective.snapshot.uuid.uuid4")
+    def test_class_method_without_cls(self, mock_uuid):
+        """Test that 'cls' is not included when not in input_fields."""
+        mock_uuid_str = "12345678-1234-5678-1234-567812345678"
+        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+
+        class MyClass:
+            class_variable = 10
+
+            @classmethod
+            def class_method(cls, x, y):
+                return x + y + cls.class_variable
+
+        @snapshot(input_fields=["y"])
+        def func(x, y):
+            return MyClass.class_method(x, y)
+
+        assert func(5, 15) == 30
+
+        _, actual_data = get_debug_file(mock_uuid_str)
+        expected_data = {
+            "FUNCTION": "func",
+            "INPUTS": {"y": 15},
+            "OUTPUT": 30,
+        }
+        assert are_snapshots_equal(actual_data, expected_data)
