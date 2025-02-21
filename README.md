@@ -1,6 +1,15 @@
 # Detective Snapshot 🕵️‍♂️🔍
 
-A Python package for capturing and comparing function input/output snapshots. Perfect for debugging, testing, and understanding complex function call hierarchies.
+A beautifully simple Python debugging tool with one purpose: capturing function inputs and outputs to files. When your code works perfectly four out of five times but mysteriously fails on that fifth run, you need to know what changed - not start another debugging session.
+
+Just add `@snapshot` and set `DEBUG=true`. That's it. Every function call creates a clean JSON snapshot file, capturing all decorated inner function calls in a single file. No setup, no terminal noise - just clear, searchable records of exactly what went in and what came out.
+
+Perfect for:
+- Catching that one input that led to an unexpected output
+- Tracking data transformations across your function chain
+- Having a permanent, searchable record of function behavior
+- Debugging nested function calls without print statement noise
+- Understanding exactly what changed between good and bad runs
 
 ## Features
 - 📸 Capture function inputs and outputs
@@ -17,12 +26,14 @@ pip install detective-snapshot
 
 ## Quick Start
 
-Enable debug mode to write snapshots:
+Enable debug mode by setting either environment variable:
 ```bash
 export DEBUG=true
+# or
+export DETECTIVE=true
 ```
 
-With debug mode on, each call to an outermost decorated function creates a new snapshot file in `./debug_snapshots/` with a unique UUID.
+With debug mode on, each call to an outermost decorated function creates a new snapshot file under `./_snapshots/` with a timestamp and unique hash.
 
 Here's a simple example using a library catalog system:
 
@@ -47,7 +58,7 @@ book = {
 result = get_book_details(book)
 ```
 
-This will create a debug file in `./debug_snapshots/` with content like:
+This will create a debug file in `./_snapshots/` with content like:
 
 ```json
 {

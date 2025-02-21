@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.5] - 2025-02-21
+## [0.1.6] - 2025-02-22
 
 ### Fixed
 - Fixed session handling between calls to the same function.
@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added support for class, instance, static methods
 - Better exception handling
-- Minor fix for support DEBUG set to TRUE or True or true or 1
+- Support for DEBUG or DETECTIVE environment variables set to TRUE|True|true|1
+- Changed snapshot file naming to use timestamps instead of UUIDs
 
 ### Changed
 - Updated README with more detailed instructions.

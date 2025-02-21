@@ -1,7 +1,9 @@
 import glob
 import os
+
 import pytest
-from detective.snapshot import inner_calls_var, session_id_var
+
+from detective.snapshot import inner_calls_var, session_id_var, session_start_time_var
 
 
 def pytest_addoption(parser):
@@ -28,11 +30,16 @@ def cleanup_snapshot_files(request):
 
     # Only cleanup if test passed
     if request.node.session.testsfailed == 0:
-        # Remove all JSON files in debug_snapshots directory
-        files = glob.glob("debug_snapshots/*.json")
-        for file in files:
+        # Remove all files in _snapshots directory
+        snapshots_dir = os.path.join(os.getcwd(), "_snapshots")
+        if os.path.exists(snapshots_dir):
+            for root, dirs, files in os.walk(snapshots_dir, topdown=False):
+                for name in files:
+                    os.remove(os.path.join(root, name))
+                for name in dirs:
+                    os.rmdir(os.path.join(root, name))
             try:
-                os.remove(file)
+                os.rmdir(snapshots_dir)
             except OSError:
                 pass
     else:
@@ -44,4 +51,5 @@ def reset_context_vars():
     """Reset context variables before each test."""
     inner_calls_var.set([])
     session_id_var.set(None)
+    session_start_time_var.set(None)
     yield

@@ -7,7 +7,12 @@ import pytest
 from detective import snapshot
 from detective.snapshot import inner_calls_var, session_id_var
 from detective.tests.fixtures_data import Cat, CocoDataclass
-from detective.tests.utils import are_snapshots_equal, get_debug_file, setup_debug_dir
+from detective.tests.utils import (
+    are_snapshots_equal,
+    get_debug_file,
+    get_test_hash,
+    setup_debug_dir,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -42,17 +47,16 @@ class ErrorProneCat:
 
 
 class TestExceptionHandling:
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_instance_method_exception(self, mock_uuid):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_instance_method_exception(self, mock_hash):
         """Test exception handling for instance methods."""
-        mock_uuid_str = "12345678-1234-5678-1234-567812345678"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash()
 
         cat_handler = ErrorProneCat(CocoDataclass)
         with pytest.raises(ValueError, match="Instance method error"):
             cat_handler.instance_error()
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash())
         expected_data = {
             "FUNCTION": "instance_error",
             "INPUTS": {"self": {"cat": CocoDataclass.to_dict()}},
@@ -60,16 +64,15 @@ class TestExceptionHandling:
         }
         assert are_snapshots_equal(actual_data, expected_data)
 
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_class_method_exception(self, mock_uuid):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_class_method_exception(self, mock_hash):
         """Test exception handling for class methods."""
-        mock_uuid_str = "23456789-2345-6789-2345-678923456789"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash("second")
 
         with pytest.raises(TypeError, match="Class method error"):
             ErrorProneCat.class_error()
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash("second"))
         expected_data = {
             "FUNCTION": "class_error",
             "INPUTS": {"cls": {"default_cat": CocoDataclass.to_dict()}},
@@ -77,16 +80,15 @@ class TestExceptionHandling:
         }
         assert are_snapshots_equal(actual_data, expected_data)
 
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_static_method_exception(self, mock_uuid):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_static_method_exception(self, mock_hash):
         """Test exception handling for static methods."""
-        mock_uuid_str = "34567890-3456-7890-3456-789034567890"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash("third")
 
         with pytest.raises(RuntimeError, match="Static method error"):
             ErrorProneCat.static_error()
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash("third"))
         expected_data = {
             "FUNCTION": "static_error",
             "INPUTS": {},
@@ -94,11 +96,10 @@ class TestExceptionHandling:
         }
         assert are_snapshots_equal(actual_data, expected_data)
 
-    @patch("detective.snapshot.uuid.uuid4")
-    def test_nested_function_exception(self, mock_uuid):
+    @patch("detective.snapshot._generate_short_hash")
+    def test_nested_function_exception(self, mock_hash):
         """Test exception handling for nested function calls."""
-        mock_uuid_str = "45678901-4567-8901-4567-890145678901"
-        mock_uuid.return_value = uuid.UUID(mock_uuid_str)
+        mock_hash.return_value = get_test_hash("fourth")
 
         @snapshot()
         def outer():
@@ -116,7 +117,7 @@ class TestExceptionHandling:
             outer()
         assert str(exc_info.value) == "Something went wrong!"
 
-        _, actual_data = get_debug_file(mock_uuid_str)
+        _, actual_data = get_debug_file(get_test_hash("fourth"))
         expected_data = {
             "FUNCTION": "outer",
             "INPUTS": {},

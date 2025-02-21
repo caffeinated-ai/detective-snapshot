@@ -1,11 +1,12 @@
 import functools
+import hashlib
 import inspect
 import json
 import logging
 import os
-import uuid
+import time
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import jsbeautifier
 from jsonpath_ng.exceptions import JSONPathError
@@ -21,6 +22,9 @@ session_id_var: ContextVar[Optional[str]] = ContextVar("debug_session_id", defau
 # Store a list of current call data dictionaries
 inner_calls_var: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar(
     "inner_function_calls", default=None
+)
+session_start_time_var: ContextVar[Optional[float]] = ContextVar(
+    "session_start_time", default=None
 )
 
 
@@ -70,6 +74,57 @@ class CustomJSONEncoder(json.JSONEncoder):
         return self.default(value)
 
 
+def get_snapshot_filepath(
+    session_id: str, function_name: str, session_start_time: float
+) -> str:
+    """Generate the filepath for a snapshot file.
+
+    Args:
+        session_id: The hash for the current session
+        function_name: Name of the outermost function
+        session_start_time: Start time of the session
+
+    Returns:
+        Path to the snapshot file
+    """
+    # Get current time in local timezone
+    current_time = time.localtime()
+    
+    # Format: MMDDHHMMSSS (month, day, hour, minute, second)
+    timestamp = time.strftime("%m%d%H%M%S", current_time)
+    
+    # Create the base directory
+    base_dir = "_snapshots"
+    os.makedirs(base_dir, exist_ok=True)
+
+    # Generate filename with function name, timestamp and hash
+    filename = f"{function_name}_{timestamp}_{session_id}.json"
+
+    return os.path.join(base_dir, filename)
+
+
+def _generate_short_hash() -> str:
+    """Generate a short 7-character hash."""
+    # Use current time and a random component to generate hash
+    timestamp = str(time.time())
+    # Take first 7 characters of the md5 hash
+    return hashlib.md5(timestamp.encode()).hexdigest()[:7]
+
+
+def _is_debug_enabled() -> bool:
+    """Check if debug mode is enabled via environment variables.
+
+    Returns:
+        True if either DEBUG or DETECTIVE is set to "true" or "1" (case insensitive)
+    """
+    debug_vars = ["DEBUG", "DETECTIVE"]
+    for var in debug_vars:
+        value = os.environ.get(var, "").lower()
+        if value in ("true", "1"):
+            return True
+    return False
+
+
 class Snapshotter:
     def __init__(
         self,
@@ -83,10 +138,12 @@ class Snapshotter:
         self.inner_calls = inner_calls_var.get() or []
         self.is_outermost = not self.inner_calls
 
-        # Reset session ID only for outermost calls
+        # Initialize session for outermost calls
         if self.is_outermost:
-            session_id_var.set(str(uuid.uuid4()))
+            session_id_var.set(_generate_short_hash())
+            session_start_time_var.set(time.time() * 1000)
         self.session_id = session_id_var.get()
+        self.session_start_time = session_start_time_var.get()
 
     def _get_or_create_session_id(self) -> str:
         # Remove this method as we handle session ID in __init__
@@ -250,9 +307,20 @@ class Snapshotter:
         return rest_of_path
 
     def _write_output(self, data: Dict[str, Any]) -> None:
-        filename = f"debug_snapshots/{self.session_id}_{data['FUNCTION']}.json"
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        with open(filename, "w") as f:
+        # Get the outermost function name
+        outermost_function = data["FUNCTION"]
+
+        # Ensure we have valid session data
+        if self.session_id is None or self.session_start_time is None:
+            raise RuntimeError("Session ID or start time not initialized")
+
+        # Generate filepath using the new function
+        filepath = get_snapshot_filepath(
+            self.session_id, outermost_function, self.session_start_time
+        )
+
+        # Write the file
+        with open(filepath, "w") as f:
             json_string = json.dumps(data, cls=CustomJSONEncoder)
             beautified_json = jsbeautifier.beautify(json_string)
             f.write(beautified_json)
@@ -336,6 +404,11 @@ class Snapshotter:
         return extracted["_output"]
 
     def capture(self, *args: Any, **kwargs: Any) -> Any:
+        """Capture function inputs and outputs."""
+        # Skip if debug mode is not enabled
+        if not _is_debug_enabled():
+            return self.func(*args, **kwargs)
+
         current_call_data = self._prepare_call_data(args, kwargs)
         parent_call_data = self.inner_calls[-1] if not self.is_outermost else None
 
@@ -394,13 +467,22 @@ class Snapshotter:
 
 def snapshot(
     input_fields: Optional[List[str]] = None, output_fields: Optional[List[str]] = None
-) -> Any:
-    """Decorator for capturing function inputs and outputs."""
+) -> Callable:
+    """Decorator to capture function inputs and outputs.
+
+    Args:
+        input_fields: Optional list of input fields to capture
+        output_fields: Optional list of output fields to capture
+
+    Returns:
+        Decorated function
+    """
 
     def decorator(func: Any) -> Any:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if os.environ.get("DEBUG", "false").lower() not in ("true", "1"):
+            # Skip if debug mode is not enabled
+            if not _is_debug_enabled():
                 return func(*args, **kwargs)
 
             snapshotter = Snapshotter(func, input_fields, output_fields)
