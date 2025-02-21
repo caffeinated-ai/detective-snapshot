@@ -166,11 +166,9 @@ This will produce a snapshot similar to:
         {
             "FUNCTION": "inner_function",
             "INPUTS": {},
-            "OUTPUT": {
-                "error": {
-                    "type": "ValueError",
-                    "message": "This is an example error."
-                }
+            "ERROR": {
+                "type": "ValueError",
+                "message": "This is an example error."
             }
         }
     ]
