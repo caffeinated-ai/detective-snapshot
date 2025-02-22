@@ -246,3 +246,40 @@ class TestSnapshotFunctionNesting:
         assert all(
             any(f.endswith(f"_{h}.json") for h in expected_hashes) for f in debug_files
         ), f"Files {debug_files} don't match expected hash patterns"
+
+    @patch("detective.snapshot._generate_short_hash")
+    def test_partial_nested_decoration(self, mock_hash):
+        """Test when only outer and innermost functions are decorated with @snapshot."""
+        mock_hash.return_value = get_test_hash()
+
+        @snapshot()
+        def outer_decorated(x):
+            # Call undecorated middle function
+            return middle_undecorated(x + 1)
+
+        def middle_undecorated(y):
+            # Call decorated innermost function
+            return inner_decorated(y * 2)
+
+        @snapshot()
+        def inner_decorated(z):
+            return z + 5
+
+        result = outer_decorated(10)  # 10 -> 11 -> 22 -> 27
+        assert result == 27
+
+        # Check debug file
+        _, actual_data = get_debug_file(get_test_hash())
+        expected_data = {
+            "FUNCTION": "outer_decorated",
+            "INPUTS": {"x": 10},
+            "OUTPUT": 27,
+            "CALLS": [
+                {
+                    "FUNCTION": "inner_decorated",
+                    "INPUTS": {"z": 22},
+                    "OUTPUT": 27,
+                }
+            ],
+        }
+        assert are_snapshots_equal(actual_data, expected_data)
