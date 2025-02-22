@@ -2,14 +2,14 @@
 
 A beautifully simple Python debugging tool that automatically logs function inputs, outputs, and exceptions into a clean, searchable JSON file. When your code works flawlessly most of the time but mysteriously fails on that one run, you can easily pinpoint what changed—without starting another debugging session.
 
-Just add `@snapshot()` to your functions and set DEBUG=true to capture every run. You can use json path expressions to select only the input variables you care about (including portions of self or cls), keeping your logs focused. For nested functions, simply decorate them with @snapshot()—-no matter how deep they are in your call chain—-and all their calls will be captured.
+Just add `@snapshot()` to your functions and set DEBUG=true to capture every run. You can use json path expressions to select only the input variables you care about (including portions of self or cls), keeping your logs focused. For downstream functions, simply decorate them with @snapshot()—-no matter how deep they are in your call chain—-and all their calls will be captured.
 
-This makes it ideal for debugging data transformations, pinpointing elusive bugs in complex, nested chains, and comparing good versus bad runs with minimal setup.
+This makes it ideal for debugging data transformations, pinpointing elusive bugs in deep, function chains, and comparing good versus bad runs with minimal setup.
 
 ## Features
 - 📸 Capture function inputs, outputs
 - 🎯 Select specific fields to snapshot
-- 🌳 Track nested function calls
+- 🌳 Track sequential function calls
 - 📦 Support for Python objects, dataclasses, and protobufs
 - 💥 Capture exception details
 
