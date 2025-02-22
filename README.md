@@ -123,7 +123,7 @@ def get_chapter_titles(book: Book):
     return [chapter.title for chapter in book.chapters]
 ```
 
-### Handle Nested Function Calls
+### Handle Function Call Chain
 
 ```python
 @snapshot()
@@ -144,7 +144,7 @@ The debug file will include the complete call hierarchy with inputs and outputs 
 
 ### Exception Handling
 
-If an exception occurs within a function decorated with `@snapshot`, Detective Snapshot will capture the exception details.  The output will include an `error` field containing the exception type and message.  Nested function calls that *also* raise exceptions will have their exceptions captured within the `CALLS` section of the parent function.
+If an exception occurs within a function decorated with `@snapshot`, Detective Snapshot will capture the exception details.  The output will include an `error` field containing the exception type and message.  Downstream function calls that *also* raise exceptions will have their exceptions captured within the `CALLS` section of the parent function.
 
 ```python
 @snapshot()
