@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "detective-snapshot"  # Keep the PyPI package name as detective-snapshot
-version = "0.1.8"
+version = "0.1.10"
 description = "A Python package for capturing and comparing function input/output snapshots"
 readme = "README.md"
 requires-python = ">=3.7"
@@ -24,7 +24,15 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
 ]
 dependencies = [
-    "jsonpath-ng",
+    "jsonpath-ng>=1.5.0",
+    "jsbeautifier>=1.14.0",
+]
+
+[project.optional-dependencies]
+proto = ["protobuf>=3.0.0"]
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
