@@ -5,10 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.10] - 2025-02-214
+## [0.1.12] - 2025-02-24
 
 ### Fixed
 - Added jsbeautifier as required dependency
+- Critical reliability improvements to ensure `@snapshot` never throws exceptions that affect the original function
+
+### Added
+- New `include_self` parameter to `@snapshot()` decorator to control whether 'self' or 'cls' are included in captured inputs. Default is TRUE.
 
 ## [0.1.8] - 2025-02-21
 

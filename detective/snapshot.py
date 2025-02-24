@@ -35,7 +35,12 @@ class CustomJSONEncoder(json.JSONEncoder):
         if is_protobuf(obj):
             return protobuf_to_dict(obj)
         elif isinstance(obj, dict):
-            return {k: self._convert_value(v) for k, v in obj.items()}
+            # Filter out non-serializable keys
+            return {
+                str(k): self._convert_value(v)
+                for k, v in obj.items()
+                # if isinstance(k, (str, int, float, bool)) or k is None
+            }
         elif isinstance(obj, list):
             return [self._convert_value(item) for item in obj]
         elif hasattr(obj, "to_dict"):
@@ -131,10 +136,12 @@ class Snapshotter:
         func: Any,
         input_fields: Optional[List[str]] = None,
         output_fields: Optional[List[str]] = None,
+        include_self: bool = True,
     ):
         self.func = func
         self.input_fields = input_fields
         self.output_fields = output_fields
+        self.include_self = include_self
         self.inner_calls = inner_calls_var.get() or []
         self.is_outermost = not self.inner_calls
 
@@ -154,6 +161,15 @@ class Snapshotter:
 
     def _prepare_call_data(self, args: Any, kwargs: Any) -> Dict[str, Any]:
         all_kwargs = inspect.getcallargs(self.func, *args, **kwargs)
+
+        # Remove 'self' or 'cls' if include_self is False
+        if not self.include_self:
+            # Check if this is an instance or class method
+            if "self" in all_kwargs:
+                del all_kwargs["self"]
+            elif "cls" in all_kwargs:
+                del all_kwargs["cls"]
+
         return {
             "FUNCTION": self.func.__name__,
             "INPUTS": all_kwargs,
@@ -409,70 +425,98 @@ class Snapshotter:
         if not _is_debug_enabled():
             return self.func(*args, **kwargs)
 
+        # Prepare call data and set up context
         current_call_data = self._prepare_call_data(args, kwargs)
         parent_call_data = self.inner_calls[-1] if not self.is_outermost else None
 
+        # Add current call to the call stack
         self.inner_calls = self.inner_calls + [current_call_data]
         inner_calls_var.set(self.inner_calls)
 
+        # Always call the original function directly and store its result or exception
+        original_exception = None
+        original_result = None
         try:
-            extracted_input = self._extract_and_format_fields(
-                current_call_data["INPUTS"], self.input_fields, True
-            )
-            current_call_data["INPUTS"] = (
-                extracted_input if extracted_input else current_call_data["INPUTS"]
-            )
+            # Execute the function
+            original_result = self.func(*args, **kwargs)
 
-            # Get the original result
-            result = self.func(*args, **kwargs)
+            # Process the successful result
+            try:
+                # Extract and format input fields if specified
+                extracted_input = self._extract_and_format_fields(
+                    current_call_data["INPUTS"], self.input_fields, True
+                )
+                if extracted_input:
+                    current_call_data["INPUTS"] = extracted_input
 
-            # Process output fields for debug snapshot only
-            current_call_data["OUTPUT"] = self._process_output_fields(result)
-
+                # Process output fields for debug snapshot
+                current_call_data["OUTPUT"] = self._process_output_fields(
+                    original_result
+                )
+            except Exception as e:
+                # If field processing fails, log it but continue
+                logger.debug(
+                    f"Detective field processing error: {self.func.__name__} - {str(e)}"
+                )
         except Exception as e:
-            logger.exception(
-                f"Error in snapshot capture for function {self.func.__name__}: {str(e)}"
-            )
-            # Update error format - make it top level and remove OUTPUT
-            if "OUTPUT" in current_call_data:
-                del current_call_data["OUTPUT"]
-            current_call_data["ERROR"] = {
-                "type": e.__class__.__name__,
-                "message": str(e),
-            }
-            if not self.is_outermost and parent_call_data is not None:
-                if "CALLS" not in parent_call_data:
-                    parent_call_data["CALLS"] = []
-                parent_call_data["CALLS"].append(current_call_data)
-            if self.is_outermost:
-                final_output = self._construct_final_output()
-                self._write_output(final_output)
-            raise
+            # Capture the original exception
+            original_exception = e
+            try:
+                # Record the error in the call data
+                if "OUTPUT" in current_call_data:
+                    del current_call_data["OUTPUT"]
+                current_call_data["ERROR"] = {
+                    "type": original_exception.__class__.__name__,
+                    "message": str(original_exception),
+                }
+            except Exception as processing_error:
+                # If error processing fails, log it but continue
+                logger.debug(
+                    f"Detective error processing error: {self.func.__name__} - {str(processing_error)}"
+                )
 
-        if not self.is_outermost:
-            if parent_call_data is not None:
+        try:
+            # Update the call hierarchy
+            if not self.is_outermost and parent_call_data is not None:
+                # Add this call to parent's CALLS list
                 if "CALLS" not in parent_call_data:
                     parent_call_data["CALLS"] = []
                 parent_call_data["CALLS"].append(current_call_data)
+
+                # Remove this call from the stack as we're returning to parent
                 self.inner_calls = self.inner_calls[:-1]
                 inner_calls_var.set(self.inner_calls)
-        else:
-            final_output = self._construct_final_output()
-            self._write_output(final_output)
-            inner_calls_var.set([])
+            elif self.is_outermost:
+                # For outermost calls, write the complete call tree to a file
+                final_output = self._construct_final_output()
+                self._write_output(final_output)
+                inner_calls_var.set([])
+        except Exception as e:
+            # If call hierarchy processing fails, log it but continue
+            logger.debug(
+                f"Detective call hierarchy error: {self.func.__name__} - {str(e)}"
+            )
+            # Make sure we clean up context vars
+            if self.is_outermost:
+                inner_calls_var.set([])
 
-        # Always return the original unmodified result
-        return result
+        # Always propagate the original function's behavior exactly
+        if original_exception:
+            raise original_exception
+        return original_result
 
 
 def snapshot(
-    input_fields: Optional[List[str]] = None, output_fields: Optional[List[str]] = None
+    input_fields: Optional[List[str]] = None,
+    output_fields: Optional[List[str]] = None,
+    include_self: bool = True,
 ) -> Callable:
     """Decorator to capture function inputs and outputs.
 
     Args:
         input_fields: Optional list of input fields to capture
         output_fields: Optional list of output fields to capture
+        include_self: Whether to include 'self' or 'cls' in the captured inputs
 
     Returns:
         Decorated function
@@ -485,7 +529,8 @@ def snapshot(
             if not _is_debug_enabled():
                 return func(*args, **kwargs)
 
-            snapshotter = Snapshotter(func, input_fields, output_fields)
+            snapshotter = Snapshotter(func, input_fields, output_fields, include_self)
+
             return snapshotter.capture(*args, **kwargs)
 
         return wrapper

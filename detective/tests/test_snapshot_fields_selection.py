@@ -695,3 +695,87 @@ class TestSnapshotFieldSelection:
             "OUTPUT": 30,
         }
         assert are_snapshots_equal(actual_data, expected_data)
+
+    @patch("detective.snapshot._generate_short_hash")
+    def test_omit_self_cls_parameter(self, mock_hash):
+        """Test that 'self' and 'cls' can be omitted using include_self=False."""
+        mock_hash.return_value = get_test_hash()
+
+        class TestClass:
+            value = 100
+            
+            def __init__(self, x):
+                self.x = x
+                
+            @snapshot(include_self=False)  # Explicitly omit self
+            def instance_method(self, y, z):
+                return self.x + y + z
+                
+            @classmethod
+            @snapshot(include_self=False)  # Explicitly omit cls
+            def class_method(cls, a, b):
+                return cls.value + a + b
+                
+            @staticmethod
+            @snapshot()  # No change for static methods
+            def static_method(p, q):
+                return p * q
+
+        # Create instance and call methods
+        instance = TestClass(10)
+        
+        # Test instance method
+        result1 = instance.instance_method(20, 30)
+        assert result1 == 60  # 10 + 20 + 30
+        
+        # Get debug file and check contents
+        _, actual_data1 = get_debug_file(get_test_hash())
+        expected_data1 = {
+            "FUNCTION": "instance_method",
+            "INPUTS": {
+                # 'self' should be omitted
+                "y": 20,
+                "z": 30
+            },
+            "OUTPUT": 60
+        }
+        assert are_snapshots_equal(actual_data1, expected_data1)
+        
+        # Reset hash for next test
+        mock_hash.return_value = get_test_hash("second")
+        
+        # Test class method
+        result2 = TestClass.class_method(50, 60)
+        assert result2 == 210  # 100 + 50 + 60
+        
+        # Get debug file and check contents
+        _, actual_data2 = get_debug_file(get_test_hash("second"))
+        expected_data2 = {
+            "FUNCTION": "class_method",
+            "INPUTS": {
+                # 'cls' should be omitted
+                "a": 50,
+                "b": 60
+            },
+            "OUTPUT": 210
+        }
+        assert are_snapshots_equal(actual_data2, expected_data2)
+        
+        # Reset hash for next test
+        mock_hash.return_value = get_test_hash("third")
+        
+        # Test static method
+        result3 = TestClass.static_method(7, 8)
+        assert result3 == 56  # 7 * 8
+        
+        # Get debug file and check contents
+        _, actual_data3 = get_debug_file(get_test_hash("third"))
+        expected_data3 = {
+            "FUNCTION": "static_method",
+            "INPUTS": {
+                "p": 7,
+                "q": 8
+            },
+            "OUTPUT": 56
+        }
+        assert are_snapshots_equal(actual_data3, expected_data3)
