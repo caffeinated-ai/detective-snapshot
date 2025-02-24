@@ -89,10 +89,10 @@ def get_snapshot_filepath(
     """
     # Get current time in local timezone
     current_time = time.localtime()
-    
+
     # Format: MMDDHHMMSSS (month, day, hour, minute, second)
     timestamp = time.strftime("%m%d%H%M%S", current_time)
-    
+
     # Create the base directory
     base_dir = "_snapshots"
     os.makedirs(base_dir, exist_ok=True)
