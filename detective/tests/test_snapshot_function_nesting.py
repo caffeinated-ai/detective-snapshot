@@ -141,7 +141,7 @@ class TestSnapshotFunctionNesting:
                 self.multiplier = multiplier
 
             @classmethod
-            @snapshot()
+            @snapshot(input_fields=["x", "cls"])
             def outer_class_method(cls, x):
                 calc = Calculator(2)
                 return calc.middle_instance_method(x + cls.base)
@@ -152,7 +152,7 @@ class TestSnapshotFunctionNesting:
                 return result + 5
 
             @staticmethod
-            @snapshot()
+            @snapshot(input_fields=["z"])
             def inner_static_method(z):
                 return z * 3
 
@@ -167,7 +167,7 @@ class TestSnapshotFunctionNesting:
             "CALLS": [
                 {
                     "FUNCTION": "middle_instance_method",
-                    "INPUTS": {"self": {"multiplier": 2}, "y": 11},
+                    "INPUTS": {"y": 11},
                     "OUTPUT": 71,
                     "CALLS": [
                         {

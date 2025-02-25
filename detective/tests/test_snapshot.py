@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import time
@@ -480,3 +481,57 @@ class TestSnapshot:
             f for f in os.listdir(debug_dir) if f.startswith("get_favorite_food_")
         ]
         assert len(files_after) == file_count_before  # No new files created
+
+    @patch("detective.snapshot._generate_short_hash")
+    def test_stacked_decorators(self, mock_hash):
+        """Test that @snapshot works correctly when stacked with other decorators."""
+        mock_hash.return_value = get_test_hash()
+
+        def my_decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                # Simple decorator that adds 1 to the result
+                result = func(*args, **kwargs)
+                return result + 1
+
+            return wrapper
+
+        class Calculator:
+            @my_decorator
+            @snapshot(input_fields=["x", "y"])
+            def add(self, x: int, y: int) -> int:
+                return x + y
+
+            @snapshot(input_fields=["x", "y"])
+            @my_decorator
+            def subtract(self, x: int, y: int) -> int:
+                return x - y
+
+        calc = Calculator()
+
+        # Test decorator before snapshot
+        result1 = calc.add(5, 3)  # Should be (5 + 3) + 1 = 9
+        assert result1 == 9
+
+        _, actual_data1 = get_debug_file(get_test_hash())
+        expected_data1 = {
+            "FUNCTION": "add",
+            "INPUTS": {"x": 5, "y": 3},
+            "OUTPUT": 8,  # Snapshot captures the original return value before my_decorator
+        }
+        assert are_snapshots_equal(actual_data1, expected_data1)
+
+        # Reset hash for second test
+        mock_hash.return_value = get_test_hash("second")
+
+        # Test snapshot before decorator
+        result2 = calc.subtract(10, 4)  # Should be (10 - 4) + 1 = 7
+        assert result2 == 7
+
+        _, actual_data2 = get_debug_file(get_test_hash("second"))
+        expected_data2 = {
+            "FUNCTION": "subtract",
+            "INPUTS": {"x": 10, "y": 4},
+            "OUTPUT": 7,  # Snapshot captures the final return value after my_decorator
+        }
+        assert are_snapshots_equal(actual_data2, expected_data2)
