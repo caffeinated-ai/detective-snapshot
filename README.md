@@ -84,12 +84,17 @@ Detective Snapshot supports both its own simple field selection syntax and full 
 ```python
 @snapshot(
     input_fields=["book.title", "book.author_id"],
-    output_fields=["name"]
+    output_fields=["name"],
+    include_implicit=False  # Default: don't include self/cls unless explicitly requested
 )
 def process_book(book):
     # Only specified fields will be captured
     pass
 ```
+
+By default, `self` and `cls` are not included in the snapshot. You can include them in two ways:
+- Set `include_implicit=True` to capture the entire self/cls object automatically
+- Add specific paths like `"self.id"` or `"cls.name"` to `input_fields` to capture just those fields
 
 ### Supported Field Selection Patterns
 

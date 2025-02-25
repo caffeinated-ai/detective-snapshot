@@ -150,7 +150,7 @@ class TestExceptionHandlingWithFieldsSelection:
         mock_hash.return_value = get_test_hash()
 
         class ErrorProneCatWithFields(ErrorProneCat):
-            @snapshot(input_fields=["self.cat"], include_self=True)
+            @snapshot(input_fields=["self.cat"], include_implicit=True)
             def instance_error(self) -> None:
                 raise ValueError("Instance method error")
 
@@ -173,7 +173,7 @@ class TestExceptionHandlingWithFieldsSelection:
 
         class ErrorProneCatWithFields(ErrorProneCat):
             @classmethod
-            @snapshot(input_fields=["cls.default_cat"], include_self=True)
+            @snapshot(input_fields=["cls.default_cat"], include_implicit=True)
             def class_error(cls) -> None:
                 raise TypeError("Class method error")
 

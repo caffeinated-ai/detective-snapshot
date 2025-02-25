@@ -130,18 +130,43 @@ def _is_debug_enabled() -> bool:
     return False
 
 
+def _get_original_function(func: Any) -> Any:
+    """Get the original function by unwrapping decorators.
+
+    Args:
+        func: The potentially wrapped function
+
+    Returns:
+        The original unwrapped function
+    """
+    while hasattr(func, "__wrapped__"):
+        func = func.__wrapped__
+    return func
+
+
 class Snapshotter:
     def __init__(
         self,
         func: Any,
         input_fields: Optional[List[str]] = None,
         output_fields: Optional[List[str]] = None,
-        include_self: bool = True,
+        include_implicit: bool = False,
     ):
         self.func = func
+        self.orig_func = _get_original_function(func)  # Get original function
+        
+        # If include_implicit is True, add self/cls to input_fields if not already present
+        if include_implicit:
+            input_fields = list(input_fields or [])  # Convert None to empty list
+            sig = inspect.signature(self.orig_func)
+            params = list(sig.parameters.keys())
+            if params and params[0] in ('self', 'cls'):
+                if not any(f == params[0] or f.startswith(f"{params[0]}.") for f in input_fields):
+                    input_fields.append(params[0])
+
         self.input_fields = input_fields
         self.output_fields = output_fields
-        self.include_self = include_self
+        self.include_implicit = include_implicit
         self.inner_calls = inner_calls_var.get() or []
         self.is_outermost = not self.inner_calls
 
@@ -160,18 +185,37 @@ class Snapshotter:
         return session_id
 
     def _prepare_call_data(self, args: Any, kwargs: Any) -> Dict[str, Any]:
-        all_kwargs = inspect.getcallargs(self.func, *args, **kwargs)
+        # Use original function for signature inspection
+        all_kwargs = inspect.getcallargs(self.orig_func, *args, **kwargs)
 
-        # Remove 'self' or 'cls' if include_self is False
-        if not self.include_self:
+        # Only remove 'self' or 'cls' if include_implicit is False AND
+        # there are no input_fields that explicitly reference self/cls
+        should_include_implicit = self.include_implicit
+        
+        # Check if any input_fields explicitly reference self or cls
+        if not should_include_implicit and self.input_fields:
+            for field in self.input_fields:
+                # Check for both direct field names and path references
+                if (field in ("self", "cls") or 
+                    field.startswith("self.") or 
+                    field.startswith("cls.")):
+                    should_include_implicit = True
+                    break
+
+        # Remove 'self' or 'cls' if we shouldn't include them
+        if not should_include_implicit:
             # Check if this is an instance or class method
             if "self" in all_kwargs:
                 del all_kwargs["self"]
             elif "cls" in all_kwargs:
                 del all_kwargs["cls"]
 
+        # Apply input field selection if specified
+        if self.input_fields:
+            all_kwargs = self._extract_and_format_fields(all_kwargs, self.input_fields, True) or all_kwargs
+
         return {
-            "FUNCTION": self.func.__name__,
+            "FUNCTION": self.orig_func.__name__,  # Use original function name
             "INPUTS": all_kwargs,
             "OUTPUT": None,
         }
@@ -215,16 +259,22 @@ class Snapshotter:
 
                 expressions = jsonpath_str.split(" | ")
                 for expr in expressions:
-                    matches = self._extract_field_values(
-                        data_as_dict, expr
-                    )  # Pass in data_as_dict instead of data
+                    matches = self._extract_field_values(data_as_dict, expr)
                     if not matches:
                         continue
 
                     for match in matches:
                         if match.value is not None:
                             clean_path = str(match.full_path).replace(".[", "[")
-                            self._update_result(result, clean_path, match.value)
+                            # For input fields, use the original field name as the key
+                            if (
+                                is_input
+                                and "." not in field_path
+                                and "[" not in field_path
+                            ):
+                                result[field_path] = match.value
+                            else:
+                                self._update_result(result, clean_path, match.value)
 
                 self._clean_empty_structures(result)
 
@@ -278,7 +328,7 @@ class Snapshotter:
         arg_index = int(field_path[field_path.index("[") + 1 : field_path.index("]")])
 
         # Get the actual parameter name from inspect.signature
-        sig = inspect.signature(self.func)
+        sig = inspect.signature(self.orig_func)
         param_names = list(sig.parameters.keys())
 
         # Extract the rest of the path after args[N]
@@ -296,7 +346,7 @@ class Snapshotter:
 
     def _handle_kwargs_syntax(self, field_path: str) -> str:
         """Handle kwargs syntax in field paths."""
-        sig = inspect.signature(self.func)
+        sig = inspect.signature(self.orig_func)
         if any(param.kind == param.VAR_KEYWORD for param in sig.parameters.values()):
             return f"kwargs.{field_path}"
         return field_path
@@ -509,14 +559,15 @@ class Snapshotter:
 def snapshot(
     input_fields: Optional[List[str]] = None,
     output_fields: Optional[List[str]] = None,
-    include_self: bool = True,
+    include_implicit: bool = False,
 ) -> Callable:
     """Decorator to capture function inputs and outputs.
 
     Args:
         input_fields: Optional list of input fields to capture
         output_fields: Optional list of output fields to capture
-        include_self: Whether to include 'self' or 'cls' in the captured inputs
+        include_implicit: Whether to include 'self' or 'cls' in the captured inputs
+                          even when not explicitly referenced in input_fields
 
     Returns:
         Decorated function
@@ -529,7 +580,9 @@ def snapshot(
             if not _is_debug_enabled():
                 return func(*args, **kwargs)
 
-            snapshotter = Snapshotter(func, input_fields, output_fields, include_self)
+            snapshotter = Snapshotter(
+                func, input_fields, output_fields, include_implicit
+            )
 
             return snapshotter.capture(*args, **kwargs)
 

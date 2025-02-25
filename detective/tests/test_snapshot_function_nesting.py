@@ -141,7 +141,7 @@ class TestSnapshotFunctionNesting:
                 self.multiplier = multiplier
 
             @classmethod
-            @snapshot(input_fields=["x"], include_self=True)
+            @snapshot(input_fields=["x", "cls"])
             def outer_class_method(cls, x):
                 calc = Calculator(2)
                 return calc.middle_instance_method(x + cls.base)

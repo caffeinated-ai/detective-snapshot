@@ -1,7 +1,7 @@
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any, List, Dict
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +11,7 @@ from detective import snapshot
 from .fixtures_data import (
     BoboCat,
     BoboProto,
+    Cat,
     CatData_dict,
     CocoCat,
     CocoDataclass,
@@ -19,7 +20,7 @@ from .fixtures_data import (
     JaggerDataclass,
     JaggerProto,
 )
-from .utils import are_snapshots_equal, get_debug_file, setup_debug_dir, get_test_hash
+from .utils import are_snapshots_equal, get_debug_file, get_test_hash, setup_debug_dir
 
 # Split the test cases into arrays based on input patterns
 SINGLE_INPUT_TEST_CASES = [
@@ -698,24 +699,24 @@ class TestSnapshotFieldSelection:
 
     @patch("detective.snapshot._generate_short_hash")
     def test_omit_self_cls_parameter(self, mock_hash):
-        """Test that 'self' and 'cls' can be omitted using include_self=False."""
+        """Test that 'self' and 'cls' can be omitted using include_implicit=False."""
         mock_hash.return_value = get_test_hash()
 
         class TestClass:
             value = 100
-            
+
             def __init__(self, x):
                 self.x = x
-                
-            @snapshot(include_self=False)  # Explicitly omit self
+
+            @snapshot(include_implicit=False)  # Explicitly omit self
             def instance_method(self, y, z):
                 return self.x + y + z
-                
+
             @classmethod
-            @snapshot(include_self=False)  # Explicitly omit cls
+            @snapshot(include_implicit=False)  # Explicitly omit cls
             def class_method(cls, a, b):
                 return cls.value + a + b
-                
+
             @staticmethod
             @snapshot()  # No change for static methods
             def static_method(p, q):
@@ -723,11 +724,11 @@ class TestSnapshotFieldSelection:
 
         # Create instance and call methods
         instance = TestClass(10)
-        
+
         # Test instance method
         result1 = instance.instance_method(20, 30)
         assert result1 == 60  # 10 + 20 + 30
-        
+
         # Get debug file and check contents
         _, actual_data1 = get_debug_file(get_test_hash())
         expected_data1 = {
@@ -735,19 +736,19 @@ class TestSnapshotFieldSelection:
             "INPUTS": {
                 # 'self' should be omitted
                 "y": 20,
-                "z": 30
+                "z": 30,
             },
-            "OUTPUT": 60
+            "OUTPUT": 60,
         }
         assert are_snapshots_equal(actual_data1, expected_data1)
-        
+
         # Reset hash for next test
         mock_hash.return_value = get_test_hash("second")
-        
+
         # Test class method
         result2 = TestClass.class_method(50, 60)
         assert result2 == 210  # 100 + 50 + 60
-        
+
         # Get debug file and check contents
         _, actual_data2 = get_debug_file(get_test_hash("second"))
         expected_data2 = {
@@ -755,27 +756,99 @@ class TestSnapshotFieldSelection:
             "INPUTS": {
                 # 'cls' should be omitted
                 "a": 50,
-                "b": 60
+                "b": 60,
             },
-            "OUTPUT": 210
+            "OUTPUT": 210,
         }
         assert are_snapshots_equal(actual_data2, expected_data2)
-        
+
         # Reset hash for next test
         mock_hash.return_value = get_test_hash("third")
-        
+
         # Test static method
         result3 = TestClass.static_method(7, 8)
         assert result3 == 56  # 7 * 8
-        
+
         # Get debug file and check contents
         _, actual_data3 = get_debug_file(get_test_hash("third"))
         expected_data3 = {
             "FUNCTION": "static_method",
-            "INPUTS": {
-                "p": 7,
-                "q": 8
-            },
-            "OUTPUT": 56
+            "INPUTS": {"p": 7, "q": 8},
+            "OUTPUT": 56,
         }
         assert are_snapshots_equal(actual_data3, expected_data3)
+
+    @patch("detective.snapshot._generate_short_hash")
+    def test_explicit_self_with_implicit_false(self, mock_hash):
+        """Test that self is included when explicitly requested, even with include_implicit=False."""
+        mock_hash.return_value = get_test_hash()
+
+        class CatHandler:
+            def __init__(self, cat: Cat):
+                self.cat = cat
+                self.id = "handler123"
+
+            @snapshot(
+                input_fields=["self.id", "name"],  # Explicitly request self.id
+                include_implicit=False  # But don't include implicit self
+            )
+            def rename_cat(self, name: str) -> Dict[str, str]:
+                return {"handler": self.id, "old_name": self.cat.name, "new_name": name}
+
+        handler = CatHandler(CocoDataclass)
+        result = handler.rename_cat("Luna")
+
+        assert result == {"handler": "handler123", "old_name": "Coco", "new_name": "Luna"}
+
+        _, actual_data = get_debug_file(get_test_hash())
+        expected_data = {
+            "FUNCTION": "rename_cat",
+            "INPUTS": {
+                "self": {"id": "handler123"},  # self.id is included because it was requested
+                "name": "Luna"  # Other args are included normally
+            },
+            "OUTPUT": {
+                "handler": "handler123",
+                "old_name": "Coco",
+                "new_name": "Luna"
+            }
+        }
+        assert are_snapshots_equal(actual_data, expected_data)
+
+    @patch("detective.snapshot._generate_short_hash")
+    def test_implicit_self_included(self, mock_hash):
+        """Test that self is included when include_implicit=True, even if not in input_fields."""
+        mock_hash.return_value = get_test_hash()
+
+        class CatHandler:
+            def __init__(self, cat: Cat):
+                self.cat = cat
+                self.id = "handler123"
+                self.prefix = "CAT-"
+
+            @snapshot(
+                input_fields=["name"],  # Don't explicitly request any self fields
+                include_implicit=True  # But include implicit self
+            )
+            def generate_id(self, name: str) -> str:
+                return f"{self.prefix}{name}-{self.id}"
+
+        handler = CatHandler(CocoDataclass)
+        result = handler.generate_id("Luna")
+
+        assert result == "CAT-Luna-handler123"
+
+        _, actual_data = get_debug_file(get_test_hash())
+        expected_data = {
+            "FUNCTION": "generate_id",
+            "INPUTS": {
+                "self": {  # All of self should be included
+                    "cat": CocoDataclass.to_dict(),
+                    "id": "handler123",
+                    "prefix": "CAT-"
+                },
+                "name": "Luna"
+            },
+            "OUTPUT": "CAT-Luna-handler123"
+        }
+        assert are_snapshots_equal(actual_data, expected_data)
