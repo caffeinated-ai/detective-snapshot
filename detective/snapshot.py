@@ -32,69 +32,56 @@ class CustomJSONEncoder(json.JSONEncoder):
     """Custom JSON encoder to handle special objects."""
 
     def default(self, obj: Any) -> Any:
-        if is_protobuf(obj):
-            return protobuf_to_dict(obj)
-        elif isinstance(obj, dict):
-            # Filter out non-serializable keys
-            return {
-                str(k): self._convert_value(v)
-                for k, v in obj.items()
-                # if isinstance(k, (str, int, float, bool)) or k is None
-            }
-        elif isinstance(obj, list):
-            return [self._convert_value(item) for item in obj]
-        elif hasattr(obj, "to_dict"):
-            return self.default(obj.to_dict())
-        elif hasattr(obj, "__dataclass_fields__"):
-            return {
-                field: self.default(getattr(obj, field))
-                for field in obj.__dataclass_fields__
-            }
-        # Special handling for class objects (cls parameter in class methods)
-        elif isinstance(obj, type):
-            # Only include non-internal attributes that are relevant for debugging
-            return {
-                k: self._convert_value(v)
-                for k, v in obj.__dict__.items()
-                if (
-                    not k.startswith("__")  # Skip internal attributes
-                    and not callable(v)  # Skip methods
-                    and not isinstance(
-                        v, (staticmethod, classmethod)
-                    )  # Skip decorators
-                )
-            }
-        elif hasattr(obj, "__dict__"):
-            return self.default(obj.__dict__)
-        else:
-            try:
+        try:
+            # Handle protobuf objects first
+            if is_protobuf(obj):
+                return protobuf_to_dict(obj)
+
+            # Handle collections
+            elif isinstance(obj, dict):
+                return {str(k): self._convert_value(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [self._convert_value(item) for item in obj]
+
+            # Handle objects with to_dict method
+            elif hasattr(obj, "to_dict") and callable(obj.to_dict):
+                return self.default(obj.to_dict())
+
+            # Handle dataclasses
+            elif hasattr(obj, "__dataclass_fields__"):
+                return {
+                    field: self.default(getattr(obj, field))
+                    for field in obj.__dataclass_fields__
+                }
+
+            # Handle class objects (cls parameter in class methods)
+            elif isinstance(obj, type):
+                return {
+                    k: self._convert_value(v)
+                    for k, v in obj.__dict__.items()
+                    if (
+                        not k.startswith("__")  # Skip internal attributes
+                        and not callable(v)  # Skip methods
+                        and not isinstance(v, (staticmethod, classmethod))  # Skip decorators
+                    )
+                }
+
+            # Handle objects with __dict__
+            elif hasattr(obj, "__dict__"):
+                return self.default(obj.__dict__)
+
+            # Fall back to default behavior
+            else:
                 return super().default(obj)
-            except TypeError:
-                return str(obj)
+        except TypeError:
+            return str(obj)
 
     def _convert_value(self, value: Any) -> Any:
         """Helper method to convert values while preserving numeric types."""
-        if isinstance(value, (int, float)):
-            return value  # Keep numeric values as-is
+        if isinstance(value, (int, float, bool, str, type(None))):
+            return value  # Keep primitive values as-is
         return self.default(value)
 
-def _sanitize_dict_keys(data: Any) -> Any:
-    """Pre-process data to ensure all dictionary keys are strings.
-
-    Args:
-        data: Any data structure that might contain dictionaries
-
-    Returns:
-        Processed data with all dictionary keys converted to strings
-    """
-    if isinstance(data, dict):
-        return {
-            str(k): _sanitize_dict_keys(v)
-            for k, v in data.items()
-        }
-    elif isinstance(data, (list, tuple)):
-        return [_sanitize_dict_keys(x) for x in data]
-    return data
 
 def get_snapshot_filepath(
     session_id: str, function_name: str, session_start_time: float
@@ -139,8 +126,7 @@ def _is_debug_enabled() -> bool:
     Returns:
         True if either DEBUG or DETECTIVE is set to "true" or "1" (case insensitive)
     """
-    debug_vars = ["DEBUG", "DETECTIVE"]
-    for var in debug_vars:
+    for var in ["DEBUG", "DETECTIVE"]:
         value = os.environ.get(var, "").lower()
         if value in ("true", "1"):
             return True
@@ -169,21 +155,16 @@ class Snapshotter:
         output_fields: Optional[List[str]] = None,
         include_implicit: bool = False,
     ):
+        # Store function references
         self.func = func
-        self.orig_func = _get_original_function(func)  # Get original function
+        self.orig_func = _get_original_function(func)
 
-        # If include_implicit is True, add self/cls to input_fields if not already present
-        if include_implicit:
-            input_fields = list(input_fields or [])  # Convert None to empty list
-            sig = inspect.signature(self.orig_func)
-            params = list(sig.parameters.keys())
-            if params and params[0] in ('self', 'cls'):
-                if not any(f == params[0] or f.startswith(f"{params[0]}.") for f in input_fields):
-                    input_fields.append(params[0])
-
-        self.input_fields = input_fields
+        # Process input fields
+        self.input_fields = self._process_input_fields(input_fields, include_implicit)
         self.output_fields = output_fields
         self.include_implicit = include_implicit
+
+        # Set up session context
         self.inner_calls = inner_calls_var.get() or []
         self.is_outermost = not self.inner_calls
 
@@ -194,12 +175,22 @@ class Snapshotter:
         self.session_id = session_id_var.get()
         self.session_start_time = session_start_time_var.get()
 
-    def _get_or_create_session_id(self) -> str:
-        # Remove this method as we handle session ID in __init__
-        session_id = session_id_var.get()
-        if session_id is None:
-            raise RuntimeError("Session ID not initialized")
-        return session_id
+    def _process_input_fields(self, input_fields: Optional[List[str]], include_implicit: bool) -> Optional[List[str]]:
+        """Process input fields to include self/cls if needed."""
+        if not include_implicit:
+            return input_fields
+
+        # Convert None to empty list
+        fields = list(input_fields or [])
+
+        # Add self/cls to input_fields if not already present
+        sig = inspect.signature(self.orig_func)
+        params = list(sig.parameters.keys())
+        if params and params[0] in ('self', 'cls'):
+            if not any(f == params[0] or f.startswith(f"{params[0]}.") for f in fields):
+                fields.append(params[0])
+
+        return fields
 
     def _prepare_call_data(self, args: Any, kwargs: Any) -> Dict[str, Any]:
         # Use original function for signature inspection
@@ -240,11 +231,8 @@ class Snapshotter:
     def _extract_field_values(self, data: Any, jsonpath_expr: str) -> List[Any]:
         """Extract values from data using a single jsonpath expression."""
         try:
-            matches = parse_ext(jsonpath_expr).find(data)
-            return matches
-        except JSONPathError:
-            return []
-        except Exception:
+            return parse_ext(jsonpath_expr).find(data)
+        except (JSONPathError, Exception):
             return []
 
     def _update_result(
@@ -254,8 +242,8 @@ class Snapshotter:
         try:
             target_expr = parse_ext(f"$.{clean_path}")
             target_expr.update_or_create(result, value)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Detective: Failed to update result at path {clean_path}: {str(e)}")
 
     def _extract_and_format_fields(
         self, data: Any, fields: Optional[List[str]], is_input: bool
@@ -267,14 +255,19 @@ class Snapshotter:
             return None
 
         # Convert data to dict once at the start
-        data_as_dict = json.loads(json.dumps(data, cls=CustomJSONEncoder))
+        try:
+            data_as_dict = json.loads(json.dumps(data, cls=CustomJSONEncoder))
+        except Exception as e:
+            logger.debug(f"Detective: Error converting data to dict: {str(e)}")
+            return None
+
         result: Dict[str, Any] = {}
 
         for field_path in fields:
             try:
                 jsonpath_str = self._cleanse_field_path(field_path)
-
                 expressions = jsonpath_str.split(" | ")
+
                 for expr in expressions:
                     matches = self._extract_field_values(data_as_dict, expr)
                     if not matches:
@@ -292,16 +285,19 @@ class Snapshotter:
                                 result[field_path] = match.value
                             else:
                                 self._update_result(result, clean_path, match.value)
-
-                self._clean_empty_structures(result)
-
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Detective: Error processing field path '{field_path}': {str(e)}")
                 continue
 
+        # Clean up the result
+        self._clean_empty_structures(result)
         return result if result else None
 
     def _clean_empty_structures(self, data: Any) -> None:
         """Recursively remove empty structures (empty lists, dicts, None values)."""
+        if not isinstance(data, (dict, list)):
+            return
+
         if isinstance(data, dict):
             # First clean nested structures
             for key, value in list(data.items()):
@@ -313,7 +309,6 @@ class Snapshotter:
                     isinstance(value, list) and all(v is None for v in value)
                 ):
                     del data[key]
-
         elif isinstance(data, list):
             # Clean nested structures
             for item in data:
@@ -321,11 +316,10 @@ class Snapshotter:
                     self._clean_empty_structures(item)
 
             # Remove None values and empty structures
-            while None in data:
-                data.remove(None)
-
-            # Remove empty dictionaries and lists
-            data[:] = [item for item in data if item not in ({}, [])]
+            data[:] = [
+                item for item in data
+                if item is not None and item != {} and item != []
+            ]
 
     def _cleanse_field_path(self, field_path: str) -> str:
         if field_path.startswith("args[") or "." in field_path:
@@ -350,14 +344,15 @@ class Snapshotter:
 
         # Extract the rest of the path after args[N]
         rest_of_path = self._extract_rest_of_path(field_path)
+        rest_suffix = f".{rest_of_path}" if rest_of_path else ""
 
         # For *args parameter, keep the args[N] syntax
         if any(param.kind == param.VAR_POSITIONAL for param in sig.parameters.values()):
-            return f"args[{arg_index}]" + (f".{rest_of_path}" if rest_of_path else "")
+            return f"args[{arg_index}]{rest_suffix}"
 
         # For named parameters, use the parameter name
         if arg_index < len(param_names):
-            return param_names[arg_index] + (f".{rest_of_path}" if rest_of_path else "")
+            return f"{param_names[arg_index]}{rest_suffix}"
 
         return field_path
 
@@ -390,46 +385,140 @@ class Snapshotter:
         return rest_of_path
 
     def _write_output(self, data: Dict[str, Any]) -> None:
+        """Write the output data to a file.
+
+        Args:
+            data: Dictionary containing the data to write
+        """
+        # Validate input data
+        if not data:
+            logger.debug("Detective: No data to write")
+            return
+
         # Get the outermost function name
-        outermost_function = data["FUNCTION"]
+        outermost_function = data.get("FUNCTION")
+        if not outermost_function:
+            logger.debug("Detective: No function name found in output data")
+            return
 
         # Ensure we have valid session data
         if self.session_id is None or self.session_start_time is None:
-            raise RuntimeError("Session ID or start time not initialized")
+            logger.debug("Detective: Session ID or start time not initialized")
+            return
 
-        # Generate filepath using the new function
+        # Generate filepath
         filepath = get_snapshot_filepath(
             self.session_id, outermost_function, self.session_start_time
         )
 
-        # Pre-process the data to ensure all dictionary keys are strings
-        sanitized_data = _sanitize_dict_keys(data)
+        try:
+            # Pre-process the data to handle any special objects
+            processed_data = self._preprocess_data(data)
 
-        # Write the file
-        with open(filepath, "w") as f:
-            json_string = json.dumps(sanitized_data, cls=CustomJSONEncoder)
-            beautified_json = jsbeautifier.beautify(json_string)
-            f.write(beautified_json)
+            # Serialize to JSON
+            json_string = json.dumps(processed_data, cls=CustomJSONEncoder)
+
+            # Write beautified JSON to file
+            with open(filepath, "w") as f:
+                beautified_json = jsbeautifier.beautify(json_string)
+                f.write(beautified_json)
+
+        except TypeError as e:
+            logger.debug(f"Detective: JSON serialization failed: {str(e)}")
+            # Try to identify problematic keys/values
+            self._debug_json_data(data)
+        except OSError as e:
+            logger.debug(f"Detective: Failed to write to file {filepath}: {str(e)}")
+        except Exception as e:
+            logger.debug(f"Detective: Error in _write_output: {str(e)}")
+
+    def _preprocess_data(self, data: Any) -> Any:
+        """Recursively preprocess data to handle special types before JSON serialization.
+
+        Args:
+            data: Any data structure that needs preprocessing
+
+        Returns:
+            Processed data safe for JSON serialization
+        """
+        # Handle None, primitive types directly
+        if data is None or isinstance(data, (int, float, bool, str)):
+            return data
+
+        # Handle dictionaries
+        if isinstance(data, dict):
+            return {str(k): self._preprocess_data(v) for k, v in data.items()}
+
+        # Handle lists and tuples
+        if isinstance(data, (list, tuple)):
+            return [self._preprocess_data(item) for item in data]
+
+        # Handle SymPy expressions and symbols
+        if hasattr(data, 'free_symbols'):  # SymPy expressions
+            return str(data)
+        if hasattr(data, 'name') and hasattr(data, 'is_Symbol'):  # SymPy symbols
+            return str(data.name)
+
+        # Default case - return as is
+        return data
+
+    def _debug_json_data(self, data: Any, path: str = "") -> None:
+        """Debug helper to identify non-serializable parts of the data structure.
+
+        Args:
+            data: Data structure to examine
+            path: Current path in the data structure
+        """
+        if isinstance(data, dict):
+            for k, v in data.items():
+                new_path = f"{path}.{k}" if path else k
+                try:
+                    json.dumps({k: v}, cls=CustomJSONEncoder)
+                except TypeError as e:
+                    logger.debug(f"Detective: Non-serializable data at {new_path}: {type(v)} - {str(e)}")
+                self._debug_json_data(v, new_path)
+        elif isinstance(data, (list, tuple)):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]"
+                try:
+                    json.dumps([item], cls=CustomJSONEncoder)
+                except TypeError as e:
+                    logger.debug(f"Detective: Non-serializable data at {new_path}: {type(item)} - {str(e)}")
+                self._debug_json_data(item, new_path)
 
     def _construct_final_output(self) -> Dict[str, Any]:
-        if self.inner_calls:
-            # Pre-process the data before constructing output
-            sanitized_calls = _sanitize_dict_keys(self.inner_calls)
+        """Construct the final output data structure for the outermost call."""
+        if not self.inner_calls:
+            logger.debug("Detective: No calls to process in _construct_final_output")
+            return {}
+
+        try:
+            # Pre-process the calls data
+            processed_calls = self._preprocess_data(self.inner_calls)
+
+            # Get the outermost call data
+            outermost_call = processed_calls[0]
+
+            # Construct the basic output structure
             final_output = {
-                "FUNCTION": sanitized_calls[0]["FUNCTION"],
-                "INPUTS": sanitized_calls[0]["INPUTS"],
+                "FUNCTION": outermost_call["FUNCTION"],
+                "INPUTS": outermost_call["INPUTS"],
             }
 
             # Add either OUTPUT or ERROR, but not both
-            if "ERROR" in sanitized_calls[0]:
-                final_output["ERROR"] = sanitized_calls[0]["ERROR"]
-            elif "OUTPUT" in sanitized_calls[0]:
-                final_output["OUTPUT"] = sanitized_calls[0]["OUTPUT"]
+            if "ERROR" in outermost_call:
+                final_output["ERROR"] = outermost_call["ERROR"]
+            elif "OUTPUT" in outermost_call:
+                final_output["OUTPUT"] = outermost_call["OUTPUT"]
 
-            if "CALLS" in sanitized_calls[0] and sanitized_calls[0]["CALLS"]:
-                final_output["CALLS"] = sanitized_calls[0]["CALLS"]
+            # Add CALLS if present
+            if "CALLS" in outermost_call and outermost_call["CALLS"]:
+                final_output["CALLS"] = outermost_call["CALLS"]
+
             return final_output
-        return {}
+        except Exception as e:
+            logger.debug(f"Detective: Error in _construct_final_output: {str(e)}")
+            return {}
 
     def _process_output_fields(self, result: Any) -> Any:
         """Process output fields selection if specified, otherwise return original result."""
@@ -439,7 +528,7 @@ class Snapshotter:
         # Convert to dict for processing
         result_dict = json.loads(json.dumps(result, cls=CustomJSONEncoder))
 
-        # For array access from root, don't wrap in _output
+        # Handle array access from root
         if any(field.startswith("[") for field in self.output_fields):
             for field_path in self.output_fields:
                 try:
@@ -451,27 +540,30 @@ class Snapshotter:
                         current_obj = {}
 
                         for match in matches:
-                            if match.value is not None:
-                                # Get the parent object index from the path
-                                path_parts = str(match.full_path).split("[")
-                                if len(path_parts) > 1:
-                                    idx = int(path_parts[1].split("]")[0])
-                                    if idx != current_idx:
-                                        if current_obj and current_idx >= 0:
-                                            output_array.append(current_obj)
-                                        current_obj = {}
-                                        current_idx = idx
+                            if match.value is None:
+                                continue
 
-                                # Add the field to the current object
-                                field_name = str(match.path).split(".")[-1]
-                                current_obj[field_name] = match.value
+                            # Get the parent object index from the path
+                            path_parts = str(match.full_path).split("[")
+                            if len(path_parts) > 1:
+                                idx = int(path_parts[1].split("]")[0])
+                                if idx != current_idx:
+                                    if current_obj and current_idx >= 0:
+                                        output_array.append(current_obj)
+                                    current_obj = {}
+                                    current_idx = idx
+
+                            # Add the field to the current object
+                            field_name = str(match.path).split(".")[-1]
+                            current_obj[field_name] = match.value
 
                         # Add the last object if exists
                         if current_obj:
                             output_array.append(current_obj)
 
                         return output_array
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Detective: Error processing array output field '{field_path}': {str(e)}")
                     continue
             return result
 
@@ -528,7 +620,7 @@ class Snapshotter:
             except Exception as e:
                 # If field processing fails, log it but continue
                 logger.debug(
-                    f"Detective field processing error: {self.func.__name__} - {str(e)}"
+                    f"Detective: Field processing error in {self.func.__name__}: {str(e)}"
                 )
         except Exception as e:
             # Capture the original exception
@@ -544,29 +636,41 @@ class Snapshotter:
             except Exception as processing_error:
                 # If error processing fails, log it but continue
                 logger.debug(
-                    f"Detective error processing error: {self.func.__name__} - {str(processing_error)}"
+                    f"Detective: Error processing exception in {self.func.__name__}: {str(processing_error)}"
                 )
 
         try:
             # Update the call hierarchy
             if not self.is_outermost and parent_call_data is not None:
-                # Add this call to parent's CALLS list
-                if "CALLS" not in parent_call_data:
-                    parent_call_data["CALLS"] = []
-                parent_call_data["CALLS"].append(current_call_data)
+                try:
+                    # Add this call to parent's CALLS list
+                    if "CALLS" not in parent_call_data:
+                        parent_call_data["CALLS"] = []
+                    # Convert any Symbol keys to strings before appending
+                    safe_call_data = {
+                        str(k) if not isinstance(k, (str, int, float, bool)) and k is not None else k: v
+                        for k, v in current_call_data.items()
+                    }
+                    parent_call_data["CALLS"].append(safe_call_data)
+                except Exception as e:
+                    logger.debug(f"Detective: Error updating call hierarchy: {str(e)}")
 
                 # Remove this call from the stack as we're returning to parent
                 self.inner_calls = self.inner_calls[:-1]
                 inner_calls_var.set(self.inner_calls)
             elif self.is_outermost:
-                # For outermost calls, write the complete call tree to a file
-                final_output = self._construct_final_output()
-                self._write_output(final_output)
-                inner_calls_var.set([])
+                try:
+                    # For outermost calls, write the complete call tree to a file
+                    final_output = self._construct_final_output()
+                    self._write_output(final_output)
+                except Exception as e:
+                    logger.debug(f"Detective: Error writing output: {str(e)}")
+                finally:
+                    inner_calls_var.set([])
         except Exception as e:
             # If call hierarchy processing fails, log it but continue
             logger.debug(
-                f"Detective call hierarchy error: {self.func.__name__} - {str(e)}"
+                f"Detective: Call hierarchy error in {str(self.func.__name__)}: {str(e)}"
             )
             # Make sure we clean up context vars
             if self.is_outermost:
@@ -602,10 +706,10 @@ def snapshot(
             if not _is_debug_enabled():
                 return func(*args, **kwargs)
 
+            # Create snapshotter and capture function execution
             snapshotter = Snapshotter(
                 func, input_fields, output_fields, include_implicit
             )
-
             return snapshotter.capture(*args, **kwargs)
 
         return wrapper
