@@ -78,6 +78,23 @@ class CustomJSONEncoder(json.JSONEncoder):
             return value  # Keep numeric values as-is
         return self.default(value)
 
+def _sanitize_dict_keys(data: Any) -> Any:
+    """Pre-process data to ensure all dictionary keys are strings.
+
+    Args:
+        data: Any data structure that might contain dictionaries
+
+    Returns:
+        Processed data with all dictionary keys converted to strings
+    """
+    if isinstance(data, dict):
+        return {
+            str(k): _sanitize_dict_keys(v)
+            for k, v in data.items()
+        }
+    elif isinstance(data, (list, tuple)):
+        return [_sanitize_dict_keys(x) for x in data]
+    return data
 
 def get_snapshot_filepath(
     session_id: str, function_name: str, session_start_time: float
@@ -154,7 +171,7 @@ class Snapshotter:
     ):
         self.func = func
         self.orig_func = _get_original_function(func)  # Get original function
-        
+
         # If include_implicit is True, add self/cls to input_fields if not already present
         if include_implicit:
             input_fields = list(input_fields or [])  # Convert None to empty list
@@ -191,13 +208,13 @@ class Snapshotter:
         # Only remove 'self' or 'cls' if include_implicit is False AND
         # there are no input_fields that explicitly reference self/cls
         should_include_implicit = self.include_implicit
-        
+
         # Check if any input_fields explicitly reference self or cls
         if not should_include_implicit and self.input_fields:
             for field in self.input_fields:
                 # Check for both direct field names and path references
-                if (field in ("self", "cls") or 
-                    field.startswith("self.") or 
+                if (field in ("self", "cls") or
+                    field.startswith("self.") or
                     field.startswith("cls.")):
                     should_include_implicit = True
                     break
@@ -385,27 +402,32 @@ class Snapshotter:
             self.session_id, outermost_function, self.session_start_time
         )
 
+        # Pre-process the data to ensure all dictionary keys are strings
+        sanitized_data = _sanitize_dict_keys(data)
+
         # Write the file
         with open(filepath, "w") as f:
-            json_string = json.dumps(data, cls=CustomJSONEncoder)
+            json_string = json.dumps(sanitized_data, cls=CustomJSONEncoder)
             beautified_json = jsbeautifier.beautify(json_string)
             f.write(beautified_json)
 
     def _construct_final_output(self) -> Dict[str, Any]:
         if self.inner_calls:
+            # Pre-process the data before constructing output
+            sanitized_calls = _sanitize_dict_keys(self.inner_calls)
             final_output = {
-                "FUNCTION": self.inner_calls[0]["FUNCTION"],
-                "INPUTS": self.inner_calls[0]["INPUTS"],
+                "FUNCTION": sanitized_calls[0]["FUNCTION"],
+                "INPUTS": sanitized_calls[0]["INPUTS"],
             }
 
             # Add either OUTPUT or ERROR, but not both
-            if "ERROR" in self.inner_calls[0]:
-                final_output["ERROR"] = self.inner_calls[0]["ERROR"]
-            elif "OUTPUT" in self.inner_calls[0]:
-                final_output["OUTPUT"] = self.inner_calls[0]["OUTPUT"]
+            if "ERROR" in sanitized_calls[0]:
+                final_output["ERROR"] = sanitized_calls[0]["ERROR"]
+            elif "OUTPUT" in sanitized_calls[0]:
+                final_output["OUTPUT"] = sanitized_calls[0]["OUTPUT"]
 
-            if "CALLS" in self.inner_calls[0] and self.inner_calls[0]["CALLS"]:
-                final_output["CALLS"] = self.inner_calls[0]["CALLS"]
+            if "CALLS" in sanitized_calls[0] and sanitized_calls[0]["CALLS"]:
+                final_output["CALLS"] = sanitized_calls[0]["CALLS"]
             return final_output
         return {}
 

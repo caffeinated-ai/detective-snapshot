@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "detective-snapshot"  # Keep the PyPI package name as detective-snapshot
-version = "0.1.13"
+version = "0.1.14"
 description = "A Python package for capturing and comparing function input/output snapshots"
 readme = "README.md"
 requires-python = ">=3.7"

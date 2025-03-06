@@ -14,3 +14,17 @@ pytest>=7.0.0
 pytest-cov>=4.0.0
 ruff>=0.1.0
 twine>=4.0.0
+
+# Testing
+pytest>=7.0.0
+sympy>=1.12  # For symbolic math in tests
+
+# Code quality
+black>=22.0.0
+isort>=5.0.0
+flake8>=4.0.0
+
+# Dependencies from main requirements.txt
+jsonpath-ng>=1.5.0
+jsbeautifier>=1.14.0
+protobuf>=4.25.0
