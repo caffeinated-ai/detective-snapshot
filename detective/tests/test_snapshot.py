@@ -537,11 +537,11 @@ class TestSnapshot:
     def test_sympy_symbol_serialization(self, mock_hash):
         """Test that SymPy Symbols are properly serialized."""
         mock_hash.return_value = get_test_hash()
-        
+
         # Create a SymPy symbol
         x = sp.Symbol('x')
         y = sp.Symbol('y')
-        
+
         # Create test data with symbols as both keys and values
         test_data = {
             x: "value_with_symbol_key",
@@ -558,17 +558,17 @@ class TestSnapshot:
             return data
 
         result = process_symbols(test_data)
-        
+
         # Verify the function returned the original data
         assert result == test_data
-        
+
         # Get the debug file and verify serialization
         _, actual_data = get_debug_file(get_test_hash())
-        
+
         # Convert the actual data to JSON and back to verify serialization
         json_str = json.dumps(actual_data, cls=CustomJSONEncoder)
         decoded = json.loads(json_str)
-        
+
         # Verify the results
         assert "INPUTS" in decoded
         inputs_data = decoded["INPUTS"]["data"]
@@ -582,7 +582,7 @@ class TestSnapshot:
     def test_snapshot_with_sympy(self, mock_hash):
         """Test the Snapshotter with SymPy objects."""
         mock_hash.return_value = get_test_hash()
-        
+
         # Create a function that uses SymPy
         @snapshot()
         def math_func(expr, value):
@@ -602,24 +602,24 @@ class TestSnapshot:
 
         # Call the function
         result = math_func(expr, 2)
-        
+
         # Verify the function result - should be 9 (2^2 + 2*2 + 1)
         assert result["result"] == 9
-        
+
         # Get the debug file and verify serialization
         _, actual_data = get_debug_file(get_test_hash())
-        
+
         # Verify the structure
         assert "FUNCTION" in actual_data
         assert "INPUTS" in actual_data
         assert "OUTPUT" in actual_data
-        
+
         # Verify the output contains serialized SymPy objects
         output = actual_data["OUTPUT"]
         assert isinstance(output["input_expr"], str)
         assert isinstance(output["symbol"], str)
         assert output["value"] == 2
-        
+
         # The result is serialized as a string, so we need to check the string value
         assert output["result"] == "9" or output["result"] == 9
 
@@ -627,7 +627,7 @@ class TestSnapshot:
     def test_complex_nested_structures(self, mock_hash):
         """Test handling of complex nested structures with SymPy objects."""
         mock_hash.return_value = get_test_hash()
-        
+
         x, y, z = sp.symbols('x y z')
 
         # Create a complex nested structure
@@ -659,17 +659,17 @@ class TestSnapshot:
             return data
 
         result = process_complex_data(test_data)
-        
+
         # Verify the function returned the original data
         assert result == test_data
-        
+
         # Get the debug file and verify serialization
         _, actual_data = get_debug_file(get_test_hash())
-        
+
         # Convert the actual data to JSON and back to verify serialization
         json_str = json.dumps(actual_data, cls=CustomJSONEncoder)
         decoded = json.loads(json_str)
-        
+
         # Verify the structure
         inputs_data = decoded["INPUTS"]["data"]
         assert isinstance(inputs_data["symbols"], list)
@@ -681,7 +681,7 @@ class TestSnapshot:
     def test_error_handling(self, mock_hash):
         """Test error handling in JSON serialization."""
         mock_hash.return_value = get_test_hash()
-        
+
         class UnserializableObject:
             def __repr__(self):
                 return "UnserializableObject()"
@@ -700,22 +700,22 @@ class TestSnapshot:
         def process_problematic_data(data):
             return data
 
-        result = process_problematic_data(test_data)
-        
+        process_problematic_data(test_data)
+
         # Get the debug file and verify serialization
         _, actual_data = get_debug_file(get_test_hash())
-        
+
         # Verify the structure
         assert "FUNCTION" in actual_data
         assert "INPUTS" in actual_data
         assert "OUTPUT" in actual_data
-        
+
         # The problematic objects should be serialized in some way (either as strings or empty objects)
         # Let's check that the normal values are preserved correctly
         inputs = actual_data["INPUTS"]["data"]
         assert inputs["normal"] == "value"
         assert inputs["nested"]["normal_list"] == [1, 2, 3]
-        
+
         # Verify that the problematic objects are handled in some way
         assert "problematic" in inputs
         assert "more_problems" in inputs["nested"]
@@ -724,20 +724,20 @@ class TestSnapshot:
     def test_snapshot_file_content(self, mock_hash):
         """Test that snapshot files contain the expected content."""
         mock_hash.return_value = get_test_hash()
-        
+
         @snapshot()
         def test_func(x, y):
             return {"result": x + y, "symbol": sp.Symbol('x')}
 
         result = test_func(1, 2)
-        
+
         # Verify the function result
         assert result["result"] == 3
         assert isinstance(result["symbol"], sp.Symbol)
-        
+
         # Get the debug file and verify content
         _, actual_data = get_debug_file(get_test_hash())
-        
+
         # Verify structure and content
         assert actual_data["FUNCTION"] == "test_func"
         assert "INPUTS" in actual_data

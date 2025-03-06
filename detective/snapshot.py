@@ -427,7 +427,7 @@ class Snapshotter:
             logger.debug(f"Detective: JSON serialization failed: {str(e)}")
             # Try to identify problematic keys/values
             self._debug_json_data(data)
-        except IOError as e:
+        except OSError as e:
             logger.debug(f"Detective: Failed to write to file {filepath}: {str(e)}")
         except Exception as e:
             logger.debug(f"Detective: Error in _write_output: {str(e)}")
