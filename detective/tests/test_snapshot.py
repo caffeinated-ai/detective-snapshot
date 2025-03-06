@@ -7,17 +7,13 @@ from typing import Any, Dict
 from unittest.mock import patch
 
 import pytest
+import sympy as sp
 
 from detective import snapshot
 
 from .fixtures_data import Cat, CocoCat, CocoDataclass, CocoProto
-from .utils import (
-    are_snapshots_equal,
-    get_debug_file,
-    get_test_hash,
-    mock_hash_sequence,
-    setup_debug_dir,
-)
+from .utils import (are_snapshots_equal, get_debug_file, get_test_hash,
+                    mock_hash_sequence, setup_debug_dir)
 
 # Test data for nested fields test
 COCO_DATA = {
@@ -535,3 +531,46 @@ class TestSnapshot:
             "OUTPUT": 7,  # Snapshot captures the final return value after my_decorator
         }
         assert are_snapshots_equal(actual_data2, expected_data2)
+
+    @patch("detective.snapshot._generate_short_hash")
+    def test_sympy_symbol_keys(self, mock_hash):
+        """Test that dictionary keys that are sympy Symbols are handled correctly."""
+        mock_hash.return_value = get_test_hash()
+
+        class SymbolicCalculator:
+            @snapshot()
+            def solve_equation(self, coefficients):
+                x = sp.Symbol('x')
+                y = sp.Symbol('y')
+                # Create a dictionary with Symbol keys
+                result = {
+                    x: coefficients['a'],
+                    y: coefficients['b'],
+                    'sum': coefficients['a'] + coefficients['b']
+                }
+                return result
+
+        calc = SymbolicCalculator()
+        coeffs = {'a': 5, 'b': 3}
+        result = calc.solve_equation(coeffs)
+
+        # Verify the function worked correctly
+        x, y = sp.Symbol('x'), sp.Symbol('y')
+        assert result[x] == 5
+        assert result[y] == 3
+        assert result['sum'] == 8
+
+        # Check the snapshot
+        _, actual_data = get_debug_file(get_test_hash())
+        expected_data = {
+            "FUNCTION": "solve_equation",
+            "INPUTS": {
+                "coefficients": {"a": 5, "b": 3}
+            },
+            "OUTPUT": {
+                "x": 5,
+                "y": 3,
+                "sum": 8
+            }
+        }
+        assert are_snapshots_equal(actual_data, expected_data)

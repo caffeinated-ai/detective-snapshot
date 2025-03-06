@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2024-03-06
+### Added
+- Support for sympy Symbol or other object keys in dictionaries
+
 ## [0.1.13] - 2025-02-24
 
 ### Fixed
